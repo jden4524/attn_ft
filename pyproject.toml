@@ -1,0 +1,27 @@
+[project]
+name = "attn_ft"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "transformers<5.0.0",
+  "accelerate",
+  "datasets<4.0.0",
+  "bitsandbytes",
+  "peft",
+  "pillow",
+  "pyyaml",
+  "numpy",
+  "jupyter",
+  "matplotlib",
+  "torch",
+  "torchvision",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
