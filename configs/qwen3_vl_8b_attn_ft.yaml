@@ -15,7 +15,7 @@ model:
 train:
   output_dir: outputs/qwen3_vl_8b_attn_ft
   seed: 42
-  batch_size: 4
+  batch_size: 2
   num_epochs: 1
   max_steps: 1000
   lr: 1.0e-4
