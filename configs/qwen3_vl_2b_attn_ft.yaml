@@ -1,11 +1,5 @@
 dataset:
   hf_dataset_id: Jackie2235/flickr30k_attn_ft
-  # hf_dataset_id: nlphuji/flickr30k
-  # split: test
-  # caption_field: caption
-  # image_field: image
-  # mask_root: data/flickr30k_sam
-  # max_samples: null
 
 model:
   name: Qwen/Qwen3-VL-2B-Instruct
