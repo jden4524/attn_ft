@@ -34,8 +34,8 @@ def vacuum_loss(pred: list[torch.Tensor], target: list[torch.Tensor], tau=1.0):
             logits = p / tau
             
             log_total_mass = torch.logsumexp(logits, dim=-1)
-            
-            foreground_logits = logits.masked_fill(target == 0, -1e9)
+            t = t.to(logits.device)
+            foreground_logits = logits.masked_fill(t == 0, -1e9)
             log_foreground_mass = torch.logsumexp(foreground_logits, dim=-1)
             losses.append((log_total_mass - log_foreground_mass).mean())
     
