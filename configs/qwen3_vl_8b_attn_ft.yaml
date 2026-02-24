@@ -5,25 +5,24 @@ model:
   name: Qwen/Qwen3-VL-8B-Instruct
   trust_remote_code: true
   load_in_4bit: false
-  lora_r: 8
-  lora_alpha: 16
+  lora_r: 16
+  lora_alpha: 32
   lora_dropout: 0.05
-  lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+  lora_target_modules: "all-linear" # [q_proj, k_proj, v_proj, o_proj]
   attention_layers: []
   attention_heads: []
 
 train:
   output_dir: outputs/qwen3_vl_8b_attn_ft
+  loss: vacuum
   seed: 42
   batch_size: 2
   num_epochs: 1
-  max_steps: 1000
+  max_steps: 1501
   lr: 1.0e-4
   weight_decay: 0.01
   warmup_steps: 100
   grad_accum_steps: 8
   mixed_precision: bf16
-  log_every: 10
-  save_every: 100
-  vision_grid_size: null
-  image_token_offset: 0
+  log_every: 20
+  save_every: 500

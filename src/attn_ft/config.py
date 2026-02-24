@@ -15,7 +15,6 @@ class DatasetConfig:
     image_field: str
     mask_root: str
     max_samples: Optional[int]
-    trust_remote_code: bool
 
 
 @dataclass
@@ -34,6 +33,7 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     output_dir: str
+    loss: str
     seed: int
     batch_size: int
     num_epochs: int
@@ -45,8 +45,6 @@ class TrainConfig:
     mixed_precision: str
     log_every: int
     save_every: int
-    vision_grid_size: List[int]
-    image_token_offset: int
 
 
 @dataclass
@@ -68,8 +66,7 @@ def load_config(path: str | Path) -> Config:
         caption_field=dset.get("caption_field", "caption"),
         image_field=dset.get("image_field", "image"),
         mask_root=dset.get("mask_root", ""),
-        max_samples=dset.get("max_samples"),
-        trust_remote_code=dset.get("trust_remote_code", False),
+        max_samples=dset.get("max_samples")
     )
 
     model_cfg = ModelConfig(
@@ -86,6 +83,7 @@ def load_config(path: str | Path) -> Config:
 
     train_cfg = TrainConfig(
         output_dir=train.get("output_dir", "outputs"),
+        loss=train.get("loss", "ce"),
         seed=train.get("seed", 42),
         batch_size=train.get("batch_size", 1),
         num_epochs=train.get("num_epochs", 1),
@@ -96,9 +94,7 @@ def load_config(path: str | Path) -> Config:
         grad_accum_steps=train.get("grad_accum_steps", 1),
         mixed_precision=train.get("mixed_precision", "no"),
         log_every=train.get("log_every", 10),
-        save_every=train.get("save_every", 500),
-        vision_grid_size=train.get("vision_grid_size", [24, 24]),
-        image_token_offset=train.get("image_token_offset", 0),
+        save_every=train.get("save_every", 500)
     )
 
     return Config(dataset=dataset_cfg, model=model_cfg, train=train_cfg)

@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 from attn_ft.attn_hooks import AttnHookManager, extract_t2i_attn
 from attn_ft.config import load_config
 from attn_ft.data import AttnSupervisionCollator
-from attn_ft.losses import attn_align_loss
+from attn_ft.losses import *
 from attn_ft.models import (
     filter_trainable_parameters,
     load_model_and_processor
@@ -74,6 +74,15 @@ def train(config_path: str) -> None:
     model, optimizer, dataloader, scheduler = accelerator.prepare(
         model, optimizer, dataloader, scheduler
     )
+    
+    if cfg.train.loss == "ce":
+        attn_align_loss = ce_loss
+        print("Using cross-entropy loss for attention alignment")
+    elif cfg.train.loss == "vacuum":
+        attn_align_loss = vacuum_loss
+        print("Using vacuum loss for attention alignment")
+    else:
+        raise ValueError(f"Unsupported loss type: {cfg.train.loss}")
 
     model.train()
     step = 0
@@ -83,6 +92,9 @@ def train(config_path: str) -> None:
         desc="train",
     )
     for epoch in range(cfg.train.num_epochs):
+        lm_loss_total = 0.0
+        attn_loss_total = 0.0
+        
         for batch in dataloader:
             if step >= max_steps:
                 break
@@ -94,9 +106,15 @@ def train(config_path: str) -> None:
                 all_maps = attn_manager.get_attentions()
                 attn_map = all_maps[-2]
                 phrase_attn = extract_t2i_attn(attn_map, batch, processor)  # (head,H,W)
-                print(outputs.loss)
-                print(attn_align_loss(phrase_attn, batch.masks))
-                loss = attn_align_loss(phrase_attn, batch.masks)  + 1.0 * outputs.loss
+                
+                align_loss = attn_align_loss(phrase_attn, batch.masks)
+                align_loss_item = align_loss.item() if isinstance(align_loss, torch.Tensor) else align_loss
+                # print(f"LM loss={outputs.loss.item():.4f}")
+                # print(f"attn_align_loss={align_loss_item:.4f}")
+                lm_loss_total += outputs.loss.item()
+                attn_loss_total += align_loss_item
+                
+                loss = align_loss  + 1.0 * outputs.loss
 
                 attn_manager.clear()
 
@@ -107,9 +125,11 @@ def train(config_path: str) -> None:
                     optimizer.zero_grad(set_to_none=True)
 
                     if accelerator.is_main_process and step % cfg.train.log_every == 0:
-                        accelerator.print(f"step={step} loss={loss.item():.4f}")
+                        accelerator.print(f"step={step} lm_loss={lm_loss_total/cfg.train.log_every:.4f} attn_loss={attn_loss_total/cfg.train.log_every:.4f}")
+                        lm_loss_total = 0.0
+                        attn_loss_total = 0.0
 
-                    if accelerator.is_main_process and step % cfg.train.save_every == 0:
+                    if accelerator.is_main_process and step % cfg.train.save_every == 0 and step > 0:
                         out_dir = Path(cfg.train.output_dir)
                         out_dir.mkdir(parents=True, exist_ok=True)
                         accelerator.save_state(out_dir / f"checkpoint-{step}")
