@@ -5,8 +5,8 @@ model:
   name: Qwen/Qwen3-VL-8B-Instruct
   trust_remote_code: true
   load_in_4bit: false
-  lora_r: 6
-  lora_alpha: 32
+  lora_r: 8
+  lora_alpha: 16
   lora_dropout: 0.05
   lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
   attention_layers: []

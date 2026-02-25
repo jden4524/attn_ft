@@ -10,7 +10,7 @@ def extract_t2i_attn(
     """Extracts and aggregates text-to-image attention maps
 
     Expects a tensor with a head dimension (e.g. [B, H, T, S] or [H, T, S]).
-    Returns a tensor with heads summed out.
+    Returns a list of tensors, each with shape (heads, num_text_tokens, H, W).
     """
     img_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
     extracted = []
@@ -19,13 +19,13 @@ def extract_t2i_attn(
         image_idx = is_image.nonzero(as_tuple=False).squeeze(1)
         layer_attn = attn[b]  # [heads, seq, seq]
         if batch.token_spans[b]:
-            text_to_image = layer_attn[:, batch.token_spans[b]][:, :, image_idx]
+            text_to_image = layer_attn[:, batch.token_spans[b], image_idx]
         
-            H, W = batch.masks[b].shape
-            attn_2d = text_to_image.mean(dim=1).view(-1, H, W)
+            # H, W = batch.masks[b].shape # 
+            # attn_2d = text_to_image.view(layer_attn.shape[0], -1, H, W) # Reshape to (heads, num_text_tokens, H, W)
         else:
-            attn_2d = None
-        extracted.append(attn_2d)
+            text_to_image = None
+        extracted.append(text_to_image)
 
     return extracted
 

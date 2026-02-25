@@ -102,11 +102,11 @@ def train(config_path: str) -> None:
             with accelerator.accumulate(model):
                 batch.inputs.to(accelerator.device)
                 labels = batch.labels.to(accelerator.device)
-                outputs = model(**batch.inputs, output_attentions=True, labels=labels)
+                outputs = model(**batch.inputs, labels=labels)
                 all_maps = attn_manager.get_attentions()
                 attn_map = all_maps[-2]
-                phrase_attn = extract_t2i_attn(attn_map, batch, processor)  # (head,H,W)
-                
+                phrase_attn = extract_t2i_attn(attn_map, batch, processor)  # list[Tensor(head, #of text tok, L)]
+
                 align_loss = attn_align_loss(phrase_attn, batch.masks)
                 align_loss_item = align_loss.item() if isinstance(align_loss, torch.Tensor) else align_loss
                 # print(f"LM loss={outputs.loss.item():.4f}")
