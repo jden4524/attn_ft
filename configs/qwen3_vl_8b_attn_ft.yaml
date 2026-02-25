@@ -18,11 +18,11 @@ train:
   seed: 42
   batch_size: 2
   num_epochs: 1
-  max_steps: 1501
+  max_steps: 5001
   lr: 1.0e-4
   weight_decay: 0.01
   warmup_steps: 100
   grad_accum_steps: 8
   mixed_precision: bf16
-  log_every: 20
-  save_every: 500
+  log_every: 50
+  save_every: 1000

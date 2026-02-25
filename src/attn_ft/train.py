@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
-from typing import Tuple
-
+import queue
+from huggingface_hub import HfApi
+import shutil
+import threading
 import torch
 from accelerate import Accelerator
 from torch.optim import AdamW
@@ -109,8 +112,7 @@ def train(config_path: str) -> None:
 
                 align_loss = attn_align_loss(phrase_attn, batch.masks)
                 align_loss_item = align_loss.item() if isinstance(align_loss, torch.Tensor) else align_loss
-                # print(f"LM loss={outputs.loss.item():.4f}")
-                # print(f"attn_align_loss={align_loss_item:.4f}")
+
                 lm_loss_total += outputs.loss.item()
                 attn_loss_total += align_loss_item
                 
@@ -132,7 +134,14 @@ def train(config_path: str) -> None:
                     if accelerator.is_main_process and step % cfg.train.save_every == 0 and step > 0:
                         out_dir = Path(cfg.train.output_dir)
                         out_dir.mkdir(parents=True, exist_ok=True)
-                        accelerator.save_state(out_dir / f"checkpoint-{step}")
+                        staging_dir = out_dir / f"staging-{step}"
+                        
+                        unwrapped_model = accelerator.unwrap_model(model)
+                        unwrapped_model.save_pretrained(staging_dir)
+                        gen_metadata(staging_dir, step, message=f"Checkpoint at step {step}")
+                        
+                        # print(f"[MAIN] Queueing Step {step} for upload.")
+                        upload_queue.put((staging_dir, step))
 
                     step += 1
                     progress.update(1)
@@ -141,11 +150,57 @@ def train(config_path: str) -> None:
             break
     progress.close()
 
+        
+
+upload_queue = queue.Queue()
+api = HfApi()
+REPO_ID = "Jackie2235/Qwen3-VL-8B-Instruct_attn_ft"
+    
+def upload_worker():
+    """Background worker that processes the upload queue one by one."""
+    while True:
+        # Get upload task (folder_path, step_number)
+        task = upload_queue.get()
+        if task is None: break  # Graceful shutdown signal
+        
+        folder_path, step = task
+        # print(f"[UPLOADER] Starting upload for Step {step}...")
+        
+        try:
+            api.upload_folder(
+                folder_path=folder_path,
+                repo_id=REPO_ID,
+                commit_message=f"Checkpoint Step {step}",
+                repo_type="model"
+            )
+            # print(f"[UPLOADER] Step {step} uploaded successfully.")
+            
+            shutil.rmtree(folder_path)
+            
+        except Exception as e:
+            print(f"[UPLOADER] Failed to upload Step {step}: {e}")
+            # Optional: You could re-add it to the queue to retry
+            # upload_queue.put(task) 
+        
+        upload_queue.task_done()
+        
+def gen_metadata(staging_dir: str, current_step: int, message: str = ""):
+    metadata = {
+        "step": current_step,
+        "message": message
+    }
+
+    # Save this into the same staging folder you're uploading
+    with open(f"{staging_dir}/metadata.json", "w") as f:
+        json.dump(metadata, f)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
+
+    threading.Thread(target=upload_worker, daemon=True).start()
     train(args.config)
 
 
