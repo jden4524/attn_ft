@@ -12,7 +12,7 @@ from accelerate import Accelerator
 from torch.optim import AdamW
 from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
 from tqdm.auto import tqdm
 
 from attn_ft.attn_hooks import AttnHookManager, extract_t2i_attn
@@ -33,6 +33,29 @@ def train(config_path: str) -> None:
         gradient_accumulation_steps=cfg.train.grad_accum_steps,
     )
     torch.manual_seed(cfg.train.seed)
+
+    wandb_run = None
+    if accelerator.is_main_process and cfg.train.wandb_enabled:
+        import wandb
+        wandb_kwargs = {
+            "project": cfg.train.wandb_project,
+            "config": {
+                "loss": cfg.train.loss,
+                "loss_weight": cfg.train.loss_weight,
+                "batch_size": cfg.train.batch_size,
+                "max_steps": cfg.train.max_steps,
+                "lr": cfg.train.lr,
+                "weight_decay": cfg.train.weight_decay,
+                "warmup_steps": cfg.train.warmup_steps,
+                "grad_accum_steps": cfg.train.grad_accum_steps,
+                "model": cfg.model.name,
+            },
+        }
+        if cfg.train.wandb_entity:
+            wandb_kwargs["entity"] = cfg.train.wandb_entity
+        if cfg.train.wandb_run_name:
+            wandb_kwargs["name"] = cfg.train.wandb_run_name
+        wandb_run = wandb.init(**wandb_kwargs)
 
     model, processor = load_model_and_processor(
         cfg.model.name,
@@ -68,10 +91,11 @@ def train(config_path: str) -> None:
     optimizer = AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
 
     max_steps = cfg.train.max_steps
-    scheduler = get_linear_schedule_with_warmup(
+    scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=cfg.train.warmup_steps,
         num_training_steps=max_steps,
+        num_cycles=3
     )
 
     model, optimizer, dataloader, scheduler = accelerator.prepare(
@@ -114,9 +138,9 @@ def train(config_path: str) -> None:
                 align_loss_item = align_loss.item() if isinstance(align_loss, torch.Tensor) else align_loss
 
                 lm_loss_total += outputs.loss.item()
-                attn_loss_total += align_loss_item
+                attn_loss_total += align_loss_item * cfg.train.loss_weight
                 
-                loss = align_loss  + 1.0 * outputs.loss
+                loss = align_loss * cfg.train.loss_weight + outputs.loss
 
                 attn_manager.clear()
 
@@ -126,22 +150,39 @@ def train(config_path: str) -> None:
                     scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
 
-                    if accelerator.is_main_process and step % cfg.train.log_every == 0:
-                        accelerator.print(f"step={step} lm_loss={lm_loss_total/cfg.train.log_every:.4f} attn_loss={attn_loss_total/cfg.train.log_every:.4f}")
+                    if accelerator.is_main_process and step > 0 and step % cfg.train.log_every == 0:
+                        avg_lm_loss = lm_loss_total / cfg.train.log_every
+                        avg_attn_loss = attn_loss_total / cfg.train.log_every
+                        avg_total_loss = avg_lm_loss + avg_attn_loss
+                        # accelerator.print(
+                        #     f"step={step} lm_loss={avg_lm_loss:.4f} "
+                        #     f"attn_align_loss={avg_attn_loss:.4f} "
+                        #     f"(after applying loss weight {cfg.train.loss_weight:.4f})"
+                        # )
+                        if wandb_run is not None:
+                            wandb_run.log(
+                                {
+                                    "lm_loss": avg_lm_loss,
+                                    "attn_align_loss": avg_attn_loss,
+                                    "total_loss": avg_total_loss,
+                                    "lr": scheduler.get_last_lr()[0],
+                                },
+                                step=step,
+                            )
                         lm_loss_total = 0.0
                         attn_loss_total = 0.0
 
-                    if accelerator.is_main_process and step % cfg.train.save_every == 0 and step > 0:
+                    if accelerator.is_main_process and step > 0 and (step % cfg.train.save_every == 0 or step == max_steps-1) :
                         out_dir = Path(cfg.train.output_dir)
                         out_dir.mkdir(parents=True, exist_ok=True)
                         staging_dir = out_dir / f"staging-{step}"
                         
                         unwrapped_model = accelerator.unwrap_model(model)
                         unwrapped_model.save_pretrained(staging_dir)
-                        gen_metadata(staging_dir, step, message=f"Checkpoint at step {step}")
+                        metadata = gen_metadata(staging_dir, step, cfg.train, message=f"Checkpoint at step {step}")
                         
                         # print(f"[MAIN] Queueing Step {step} for upload.")
-                        upload_queue.put((staging_dir, step))
+                        upload_queue.put((staging_dir, metadata))
 
                     step += 1
                     progress.update(1)
@@ -149,6 +190,9 @@ def train(config_path: str) -> None:
         if step >= max_steps:
             break
     progress.close()
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
         
 
@@ -163,14 +207,14 @@ def upload_worker():
         task = upload_queue.get()
         if task is None: break  # Graceful shutdown signal
         
-        folder_path, step = task
+        folder_path, metadata = task
         # print(f"[UPLOADER] Starting upload for Step {step}...")
         
         try:
             api.upload_folder(
                 folder_path=folder_path,
                 repo_id=REPO_ID,
-                commit_message=f"Checkpoint Step {step}",
+                commit_message=f"loss: {metadata['loss']}, loss_weight: {metadata['loss_weight']:.4f} - Step {metadata['step']}",
                 repo_type="model"
             )
             # print(f"[UPLOADER] Step {step} uploaded successfully.")
@@ -184,8 +228,10 @@ def upload_worker():
         
         upload_queue.task_done()
         
-def gen_metadata(staging_dir: str, current_step: int, message: str = ""):
+def gen_metadata(staging_dir: str, current_step: int, train_cfg, message: str = ""):
     metadata = {
+        "loss": train_cfg.loss,
+        "loss_weight": train_cfg.loss_weight,
         "step": current_step,
         "message": message
     }
@@ -193,15 +239,18 @@ def gen_metadata(staging_dir: str, current_step: int, message: str = ""):
     # Save this into the same staging folder you're uploading
     with open(f"{staging_dir}/metadata.json", "w") as f:
         json.dump(metadata, f)
-
+    return metadata
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
 
-    threading.Thread(target=upload_worker, daemon=True).start()
+    upload_thread = threading.Thread(target=upload_worker, daemon=False)
+    upload_thread.start()
     train(args.config)
+    # makes sure all uploads are done before exiting
+    upload_thread.join()
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ class ModelConfig:
 class TrainConfig:
     output_dir: str
     loss: str
+    loss_weight: float
     seed: int
     batch_size: int
     num_epochs: int
@@ -45,6 +46,10 @@ class TrainConfig:
     mixed_precision: str
     log_every: int
     save_every: int
+    wandb_enabled: bool
+    wandb_project: str
+    wandb_entity: Optional[str]
+    wandb_run_name: Optional[str]
 
 
 @dataclass
@@ -84,6 +89,7 @@ def load_config(path: str | Path) -> Config:
     train_cfg = TrainConfig(
         output_dir=train.get("output_dir", "outputs"),
         loss=train.get("loss", "ce"),
+        loss_weight=train.get("loss_weight", 1.0),
         seed=train.get("seed", 42),
         batch_size=train.get("batch_size", 1),
         num_epochs=train.get("num_epochs", 1),
@@ -94,7 +100,11 @@ def load_config(path: str | Path) -> Config:
         grad_accum_steps=train.get("grad_accum_steps", 1),
         mixed_precision=train.get("mixed_precision", "no"),
         log_every=train.get("log_every", 10),
-        save_every=train.get("save_every", 500)
+        save_every=train.get("save_every", 500),
+        wandb_enabled=train.get("wandb_enabled", False),
+        wandb_project=train.get("wandb_project", "attn_ft"),
+        wandb_entity=train.get("wandb_entity"),
+        wandb_run_name=train.get("wandb_run_name"),
     )
 
     return Config(dataset=dataset_cfg, model=model_cfg, train=train_cfg)

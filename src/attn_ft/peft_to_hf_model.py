@@ -65,10 +65,14 @@ def write_eval_json(checkpoint_name, checkpoint_dir):
                 "class": "ImageMCQDataset",
                 "dataset": "MMMU_DEV_VAL"
             },
-            "OCRBench": {
-                "class": "OCRBench",
-                "dataset": "OCRBench"
-            }
+            # "OCRBench": {
+            #     "class": "OCRBench",
+            #     "dataset": "OCRBench"
+            # },
+            "SEEDBench_IMG": {
+                "class": "ImageMCQDataset",
+                "dataset": "SEEDBench_IMG"
+            },
         },
     }
     

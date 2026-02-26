@@ -17,6 +17,7 @@ dependencies = [
   "matplotlib",
   "torch",
   "torchvision",
+  "wandb",
 ]
 
 [build-system]
