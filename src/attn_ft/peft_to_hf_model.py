@@ -31,14 +31,16 @@ def load_and_save(adapter_path, output_path):
     base_model = Qwen3VLForConditionalGeneration.from_pretrained(base_model_id,device_map="cpu",low_cpu_mem_usage=True,dtype="auto")
     model = PeftModel.from_pretrained(base_model, adapter_path)
     
-    checkpoint_name = f"{base_model_id}-{meta['step']}"
+    base_model_name = base_model_id.split("/")[-1]
+    checkpoint_name = f"{base_model_name}-{meta['step']}"
     checkpoint_dir = os.path.join(output_path, checkpoint_name)
     merged_model = model.merge_and_unload()
     merged_model.save_pretrained(checkpoint_dir, safe_serialization=True) # Saves as .safetensors
     processor.save_pretrained(checkpoint_dir)
+    return checkpoint_name, checkpoint_dir
     
     
-def run_eval(checkpoint_name, checkpoint_dir):
+def write_eval_json(checkpoint_name, checkpoint_dir):
     eval_config = {
         "model": {
             checkpoint_name: {
@@ -55,7 +57,18 @@ def run_eval(checkpoint_name, checkpoint_dir):
             }
         },
         "data": {
-            "MMBench_DEV_EN_V11": {}
+            "MMBench_DEV_EN_V11": {
+                "class": "ImageMCQDataset",
+                "dataset": "MMBench_DEV_EN_V11"
+            },
+            "MMMU_DEV_VAL": {
+                "class": "ImageMCQDataset",
+                "dataset": "MMMU_DEV_VAL"
+            },
+            "OCRBench": {
+                "class": "OCRBench",
+                "dataset": "OCRBench"
+            }
         },
     }
     
@@ -66,8 +79,8 @@ def run_eval(checkpoint_name, checkpoint_dir):
     
 def main() -> None:
     args = parse_args()
-    load_and_save(args.peft_dir, args.output_dir)
-    
+    checkpoint_name, checkpoint_dir = load_and_save(args.peft_dir, args.output_dir)
+    write_eval_json(checkpoint_name, checkpoint_dir)
     
 
 if __name__ == "__main__":
