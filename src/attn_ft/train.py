@@ -40,7 +40,7 @@ def train(config_path: str) -> None:
 
     if cfg.train.wandb_enabled:
         wandb_kwargs = {
-            "project": cfg.train.wandb_project,
+            "project_name": cfg.train.wandb_project,
             "config": {
                 "loss": cfg.train.loss,
                 "loss_weight": cfg.train.loss_weight,
