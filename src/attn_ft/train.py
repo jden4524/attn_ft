@@ -29,7 +29,7 @@ from attn_ft.models import (
 def train(config_path: str) -> None:
     cfg = load_config(config_path)
     wandb_run = "wandb" if cfg.train.wandb_enabled else None
-    cfg.train.grad_accum_steps = cfg.train.grad_accum_steps//os.environ.get("WORLD_SIZE", 1)
+    cfg.train.grad_accum_steps = cfg.train.grad_accum_steps//int(os.environ.get("WORLD_SIZE", 1))
     accelerator = Accelerator(
         mixed_precision=cfg.train.mixed_precision,
         gradient_accumulation_steps=cfg.train.grad_accum_steps,
@@ -106,10 +106,10 @@ def train(config_path: str) -> None:
     
     if cfg.train.loss == "ce":
         attn_align_loss = ce_loss
-        print("Using cross-entropy loss for attention alignment")
+        accelerator.print("Using cross-entropy loss for attention alignment")
     elif cfg.train.loss == "vacuum":
         attn_align_loss = vacuum_loss
-        print("Using vacuum loss for attention alignment")
+        accelerator.print("Using vacuum loss for attention alignment")
     else:
         raise ValueError(f"Unsupported loss type: {cfg.train.loss}")
 
