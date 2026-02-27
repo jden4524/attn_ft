@@ -17,13 +17,13 @@ train:
   loss: ce
   loss_weight: 0.01
   seed: 42
-  batch_size: 2
+  batch_size: 8
   num_epochs: 1
   max_steps: 16000
   lr: 1.0e-4
   weight_decay: 0.01
   warmup_steps: 200
-  grad_accum_steps: 8
+  grad_accum_steps: 1
   mixed_precision: bf16
   log_every: 20
   save_every: 4000
