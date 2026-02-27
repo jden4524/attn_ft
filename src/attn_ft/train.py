@@ -213,7 +213,9 @@ def upload_worker():
     while True:
         # Get upload task (folder_path, step_number)
         task = upload_queue.get()
-        if task is None: break  # Graceful shutdown signal
+        if task is None:
+            upload_queue.task_done()
+            break  # Graceful shutdown signal
         
         folder_path, metadata = task
         # print(f"[UPLOADER] Starting upload for Step {step}...")
@@ -230,7 +232,7 @@ def upload_worker():
             shutil.rmtree(folder_path)
             
         except Exception as e:
-            print(f"[UPLOADER] Failed to upload Step {step}: {e}")
+            print(f"[UPLOADER] Failed to upload Step {metadata['step']}: {e}")
             # Optional: You could re-add it to the queue to retry
             # upload_queue.put(task) 
         
@@ -254,11 +256,19 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
 
-    upload_thread = threading.Thread(target=upload_worker, daemon=False)
-    upload_thread.start()
+    is_main_process = int(os.environ.get("RANK", "0")) == 0
+    upload_thread = None
+    if is_main_process:
+        upload_thread = threading.Thread(target=upload_worker, daemon=False)
+        upload_thread.start()
+
     train(args.config)
-    # makes sure all uploads are done before exiting
-    upload_thread.join()
+
+    if is_main_process and upload_thread is not None:
+        upload_queue.join()
+        upload_queue.put(None)
+        # makes sure all uploads are done before exiting
+        upload_thread.join()
 
 
 if __name__ == "__main__":

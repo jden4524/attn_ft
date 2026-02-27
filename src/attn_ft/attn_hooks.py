@@ -39,7 +39,6 @@ class AttnHookManager:
     def _hook_fn(self, layer_idx: int):
         """Internal hook to capture the second element of the layer output."""
         def hook(module, input, output):
-            # In Qwen, if output_attentions=True, output is (attn_output, weights, past_key_value)
             if isinstance(output, tuple) and len(output) > 1:
                 self.attentions[layer_idx] = output[1]
         return hook
