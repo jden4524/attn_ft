@@ -155,10 +155,12 @@ def train(config_path: str) -> None:
                 attn_manager.clear()
 
                 accelerator.backward(loss)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
                 if accelerator.sync_gradients:
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad(set_to_none=True)
+                    step += 1
+                    progress.update(1)
 
                     if accelerator.is_main_process and step > 0 and step % cfg.train.log_every == 0:
                         avg_lm_loss = lm_loss_total / cfg.train.log_every
@@ -193,8 +195,6 @@ def train(config_path: str) -> None:
                         # print(f"[MAIN] Queueing Step {step} for upload.")
                         upload_queue.put((staging_dir, metadata))
 
-                    step += 1
-                    progress.update(1)
 
         if step >= total_training_steps:
             break
