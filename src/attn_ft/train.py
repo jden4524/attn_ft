@@ -12,8 +12,9 @@ from accelerate import Accelerator
 from torch.optim import AdamW
 from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformers import get_cosine_schedule_with_warmup
+from transformers import get_cosine_with_hard_restarts_schedule_with_warmup
 from tqdm.auto import tqdm
+import os
 
 from attn_ft.attn_hooks import AttnHookManager, extract_t2i_attn
 from attn_ft.config import load_config
@@ -27,16 +28,17 @@ from attn_ft.models import (
 
 def train(config_path: str) -> None:
     cfg = load_config(config_path)
-
+    wandb_run = "wandb" if cfg.train.wandb_enabled else None
+    cfg.train.grad_accum_steps = cfg.train.grad_accum_steps//os.environ.get("WORLD_SIZE", 1)
     accelerator = Accelerator(
         mixed_precision=cfg.train.mixed_precision,
         gradient_accumulation_steps=cfg.train.grad_accum_steps,
+        log_with=wandb_run,
     )
     torch.manual_seed(cfg.train.seed)
 
-    wandb_run = None
-    if accelerator.is_main_process and cfg.train.wandb_enabled:
-        import wandb
+
+    if cfg.train.wandb_enabled:
         wandb_kwargs = {
             "project": cfg.train.wandb_project,
             "config": {
@@ -55,7 +57,7 @@ def train(config_path: str) -> None:
             wandb_kwargs["entity"] = cfg.train.wandb_entity
         if cfg.train.wandb_run_name:
             wandb_kwargs["name"] = cfg.train.wandb_run_name
-        wandb_run = wandb.init(**wandb_kwargs)
+        accelerator.init_trackers(**wandb_kwargs)
 
     model, processor = load_model_and_processor(
         cfg.model.name,
@@ -91,7 +93,7 @@ def train(config_path: str) -> None:
     optimizer = AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
 
     max_steps = cfg.train.max_steps
-    scheduler = get_cosine_schedule_with_warmup(
+    scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(
         optimizer,
         num_warmup_steps=cfg.train.warmup_steps,
         num_training_steps=max_steps,
@@ -160,12 +162,11 @@ def train(config_path: str) -> None:
                         #     f"(after applying loss weight {cfg.train.loss_weight:.4f})"
                         # )
                         if wandb_run is not None:
-                            wandb_run.log(
-                                {
-                                    "lm_loss": avg_lm_loss,
-                                    "attn_align_loss": avg_attn_loss,
-                                    "total_loss": avg_total_loss,
-                                    "lr": scheduler.get_last_lr()[0],
+                            accelerator.log({
+                                "lm_loss": avg_lm_loss,
+                                "attn_align_loss": avg_attn_loss,
+                                "total_loss": avg_total_loss,
+                                "lr": scheduler.get_last_lr()[0],
                                 },
                                 step=step,
                             )
@@ -190,9 +191,8 @@ def train(config_path: str) -> None:
         if step >= max_steps:
             break
     progress.close()
+    accelerator.end_training()
 
-    if wandb_run is not None:
-        wandb_run.finish()
 
         
 
