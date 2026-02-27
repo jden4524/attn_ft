@@ -32,7 +32,7 @@ def load_and_save(adapter_path, output_path):
     model = PeftModel.from_pretrained(base_model, adapter_path)
     
     base_model_name = base_model_id.split("/")[-1]
-    checkpoint_name = f"{base_model_name}-{meta['step']}"
+    checkpoint_name = f"{base_model_name}_{meta['loss']}_{meta['step']}"
     checkpoint_dir = os.path.join(output_path, checkpoint_name)
     merged_model = model.merge_and_unload()
     merged_model.save_pretrained(checkpoint_dir, safe_serialization=True) # Saves as .safetensors
@@ -69,6 +69,10 @@ def write_eval_json(checkpoint_name, checkpoint_dir):
             #     "class": "OCRBench",
             #     "dataset": "OCRBench"
             # },
+            "ScienceQA_TEST": {
+                "class": "ImageMCQDataset",
+                "dataset": "ScienceQA_TEST"
+            },
             "SEEDBench_IMG": {
                 "class": "ImageMCQDataset",
                 "dataset": "SEEDBench_IMG"

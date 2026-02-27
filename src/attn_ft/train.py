@@ -29,7 +29,12 @@ from attn_ft.models import (
 def train(config_path: str) -> None:
     cfg = load_config(config_path)
     wandb_run = "wandb" if cfg.train.wandb_enabled else None
-    cfg.train.grad_accum_steps = cfg.train.grad_accum_steps//int(os.environ.get("WORLD_SIZE", 1))
+    
+    DESIRED_EBS = 16
+    BATCH_SIZE_PER_GPU = cfg.train.batch_size 
+    NUM_GPUS = int(os.environ.get("WORLD_SIZE", 1))
+    cfg.train.grad_accum_steps = DESIRED_EBS // (BATCH_SIZE_PER_GPU * NUM_GPUS)
+
     accelerator = Accelerator(
         mixed_precision=cfg.train.mixed_precision,
         gradient_accumulation_steps=cfg.train.grad_accum_steps,
@@ -92,17 +97,20 @@ def train(config_path: str) -> None:
         accelerator.print(f"trainable parameters: {trainable_params}")
     optimizer = AdamW(trainable, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
 
-    max_steps = cfg.train.max_steps
+
+
+    model, optimizer, dataloader = accelerator.prepare(
+        model, optimizer, dataloader
+    )
+    steps_per_epoch = len(dataloader) // cfg.train.grad_accum_steps
+    total_training_steps = steps_per_epoch * cfg.train.num_epochs
     scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(
         optimizer,
         num_warmup_steps=cfg.train.warmup_steps,
-        num_training_steps=max_steps,
+        num_training_steps=total_training_steps,
         num_cycles=3
     )
-
-    model, optimizer, dataloader, scheduler = accelerator.prepare(
-        model, optimizer, dataloader, scheduler
-    )
+    scheduler = accelerator.prepare(scheduler)
     
     if cfg.train.loss == "ce":
         attn_align_loss = ce_loss
@@ -116,7 +124,7 @@ def train(config_path: str) -> None:
     model.train()
     step = 0
     progress = tqdm(
-        total=max_steps,
+        total=total_training_steps,
         disable=not accelerator.is_main_process,
         desc="train",
     )
@@ -125,7 +133,7 @@ def train(config_path: str) -> None:
         attn_loss_total = 0.0
         
         for batch in dataloader:
-            if step >= max_steps:
+            if step >= total_training_steps:
                 break
 
             with accelerator.accumulate(model):
@@ -173,7 +181,7 @@ def train(config_path: str) -> None:
                         lm_loss_total = 0.0
                         attn_loss_total = 0.0
 
-                    if accelerator.is_main_process and step > 0 and (step % cfg.train.save_every == 0 or step == max_steps-1) :
+                    if accelerator.is_main_process and step > 0 and (step % cfg.train.save_every == 0 or step == total_training_steps-1) :
                         out_dir = Path(cfg.train.output_dir)
                         out_dir.mkdir(parents=True, exist_ok=True)
                         staging_dir = out_dir / f"staging-{step}"
@@ -188,7 +196,7 @@ def train(config_path: str) -> None:
                     step += 1
                     progress.update(1)
 
-        if step >= max_steps:
+        if step >= total_training_steps:
             break
     progress.close()
     accelerator.end_training()
