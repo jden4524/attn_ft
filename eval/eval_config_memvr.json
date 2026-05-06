@@ -1,0 +1,49 @@
+{
+  "model": {
+    "Qwen3-VL-8B-Instruct-MemVR": {
+      "class": "Qwen3VLChat",
+      "model_path": "Qwen/Qwen3-VL-8B-Instruct",
+      "use_custom_prompt": true,
+      "max_new_tokens": 512,
+      "use_vllm": false,
+      "apply_memvr": true,
+      "memvr_starting_layer": 5,
+      "memvr_ending_layer": 16,
+      "memvr_entropy_threshold": 0.75,
+      "memvr_retracing_ratio": 0.1,
+      "temperature": 0.7,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 1.5,
+      "top_p": 0.8,
+      "top_k": 20,
+      "min_pixels": 200704,
+      "max_pixels": 1003520
+    }
+  },
+  "data": {
+    "MMVP": {
+      "class": "ImageMCQDataset",
+      "dataset": "MMVP"
+    },
+    "VStarBench": {
+      "class": "ImageMCQDataset",
+      "dataset": "VStarBench"
+    },
+    "RealWorldQA": {
+      "class": "ImageMCQDataset",
+      "dataset": "RealWorldQA"
+    },
+    "VisOnlyQA-VLMEvalKit": {
+      "class": "ImageMCQDataset",
+      "dataset": "VisOnlyQA-VLMEvalKit"
+    },
+    "HallusionBench": {
+      "class": "ImageYORNDataset",
+      "dataset": "HallusionBench"
+    },
+    "POPE": {
+      "class": "ImageYORNDataset",
+      "dataset": "POPE"
+    }
+  }
+}

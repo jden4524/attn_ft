@@ -1,0 +1,1 @@
+python VLMEvalKit/run.py --config eval_config_memvr.json   --work-dir eval_results
