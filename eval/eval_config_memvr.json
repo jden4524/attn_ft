@@ -1,8 +1,8 @@
 {
   "model": {
-    "Qwen3-VL-8B-Instruct-MemVR": {
+    "Qwen3-VL-4B-Instruct-MemVR": {
       "class": "Qwen3VLChat",
-      "model_path": "Qwen/Qwen3-VL-8B-Instruct",
+      "model_path": "Qwen/Qwen3-VL-4B-Instruct",
       "use_custom_prompt": true,
       "max_new_tokens": 512,
       "use_vllm": false,
