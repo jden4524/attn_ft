@@ -1,9 +1,8 @@
 """
-MemVR (Memory-augmented Vision Retracing) implementation for Qwen3-VL models.
+MemVR (Memory-augmented Vision Retracing) implementation for VLMEvalKit models.
 
-This module provides MemVR patching for Qwen3-VL-4B-Instruct and compatible models.
-MemVR patches the language model layers with attention hooks and adapters to enable
-dynamic vision token retracing during generation.
+This module provides runtime MemVR patching for compatible Hugging Face VLMs,
+currently Qwen3-VL and Mllama-based Llama 3.2 Vision models.
 
 Reference: https://github.com/1zhou-Wang/MemVR
 """
@@ -63,12 +62,30 @@ def _qwen3_vl_mlp_forward(self, x):
     return (ffn_out * (1 - retracing_ratio)) + (norm_adapter_out * retracing_ratio)
 
 
+def _flatten_visual_token(visual_token):
+    """Normalize captured visual tokens to a 2D [tokens, hidden] tensor."""
+    if visual_token is None:
+        return None
+    if isinstance(visual_token, (list, tuple)):
+        if len(visual_token) == 0:
+            return None
+        visual_token = torch.cat(list(visual_token), dim=0)
+    if visual_token.ndim == 3:
+        return visual_token.reshape(-1, visual_token.shape[-1])
+    return visual_token
+
+
+def _set_visual_token_on_text_model(text_model, visual_token):
+    """Set visual token to the first layer MLP of a decoder-only text backbone."""
+    visual_token = _flatten_visual_token(visual_token)
+    if visual_token is None or len(text_model.layers) == 0:
+        return
+    text_model.layers[0].mlp.visual_token = visual_token
+
+
 def _set_qwen3_vl_visual_token(qwen3_model, visual_token):
     """Set visual token to the first layer MLP of Qwen3-VL language model."""
-    language_model = qwen3_model.language_model
-    if visual_token is None or len(language_model.layers) == 0:
-        return
-    language_model.layers[0].mlp.visual_token = visual_token
+    _set_visual_token_on_text_model(qwen3_model.language_model, visual_token)
 
 
 def _extract_qwen3_vl_visual_token(outputs):
@@ -81,12 +98,12 @@ def _extract_qwen3_vl_visual_token(outputs):
     else:
         image_embeds = outputs
 
-    if isinstance(image_embeds, (list, tuple)):
-        if len(image_embeds) == 0:
-            return None
-        return torch.cat(image_embeds, dim=0)
+    return _flatten_visual_token(image_embeds)
 
-    return image_embeds
+
+def _extract_mllama_visual_token(cross_attention_states):
+    """Extract visual tokens from Mllama cross-attention states."""
+    return _flatten_visual_token(cross_attention_states)
 
 
 def _wrap_qwen3_vl_get_image_features(qwen3_model):
@@ -131,6 +148,16 @@ def _reset_qwen3_vl_adapters(text_model):
 
 def _qwen3_vl_forward_pre_hook(module, args, kwargs):
     """Pre-hook for Qwen3-VL forward: initialize MemVR state."""
+    _reset_qwen3_vl_adapters(module)
+    module._memvr_state = _build_memvr_state(module)
+    return args, kwargs
+
+
+def _mllama_forward_pre_hook(module, args, kwargs):
+    """Pre-hook for Mllama forward: capture cross-attention states and initialize MemVR state."""
+    cross_attention_states = kwargs.get("cross_attention_states", None)
+    if cross_attention_states is not None:
+        _set_visual_token_on_text_model(module, _extract_mllama_visual_token(cross_attention_states))
     _reset_qwen3_vl_adapters(module)
     module._memvr_state = _build_memvr_state(module)
     return args, kwargs
@@ -222,32 +249,33 @@ def _patch_qwen3_vl_memvr(text_model, qwen3_model):
     text_model._memvr_handles = handles
 
 
-# ==================== Public API ====================
+def _patch_mllama_memvr(text_model):
+    """Register all MemVR hooks and patches on Mllama language model."""
+    if hasattr(text_model, "_memvr_handles"):
+        return
 
-def apply_memvr_to_loaded_model(
+    handles = [
+        text_model.register_forward_pre_hook(_mllama_forward_pre_hook, with_kwargs=True),
+        text_model.register_forward_hook(_qwen3_vl_forward_post_hook, with_kwargs=True),
+    ]
+
+    for layer_idx, decoder_layer in enumerate(text_model.layers):
+        _ensure_memvr_attrs(decoder_layer.mlp)
+        if not hasattr(decoder_layer.mlp, "_memvr_original_forward"):
+            decoder_layer.mlp._memvr_original_forward = decoder_layer.mlp.forward
+            decoder_layer.mlp.forward = MethodType(_qwen3_vl_mlp_forward, decoder_layer.mlp)
+        handles.append(decoder_layer.register_forward_hook(_make_qwen3_vl_layer_hook(text_model, layer_idx), with_kwargs=True))
+
+    text_model._memvr_handles = handles
+
+
+def _apply_memvr_to_qwen3_vl_model(
     model,
-    starting_layer: int = 5,
-    ending_layer: int = 16,
-    entropy_threshold: float = 0.75,
-    retracing_ratio: float = 0.0,
+    starting_layer: int,
+    ending_layer: int,
+    entropy_threshold: float,
+    retracing_ratio: float,
 ):
-    """
-    Apply MemVR patches to a loaded Qwen3-VL model.
-
-    Args:
-        model: A Qwen3VLForConditionalGeneration model instance.
-        starting_layer: First layer to monitor for entropy triggering (default: 5).
-        ending_layer: Last layer to monitor for entropy triggering (default: 16).
-        entropy_threshold: Entropy threshold for triggering vision retracing (default: 0.75).
-        retracing_ratio: Blend ratio for retracing adapter output (default: 0.0, i.e., disabled).
-
-    Returns:
-        The patched model (same instance, modified in-place).
-
-    Raises:
-        TypeError: If model does not have the expected Qwen3-VL structure.
-        ValueError: If language model has no decoder layers.
-    """
     if not hasattr(model, "model") or not hasattr(model.model, "language_model"):
         raise TypeError("Expected a Hugging Face Qwen3-VL model with a .model.language_model stack.")
 
@@ -272,3 +300,82 @@ def apply_memvr_to_loaded_model(
         decoder_layer.mlp.retracing_ratio = retracing_ratio
 
     return model
+
+
+def _apply_memvr_to_mllama_model(
+    model,
+    starting_layer: int,
+    ending_layer: int,
+    entropy_threshold: float,
+    retracing_ratio: float,
+):
+    if not hasattr(model, "language_model") or not hasattr(model, "vision_model"):
+        raise TypeError("Expected a Hugging Face Mllama model with language_model and vision_model components.")
+
+    text_model = model.language_model
+
+    if not hasattr(model, "lm_head"):
+        raise TypeError("Model is missing 'lm_head' attribute required for MemVR entropy computation.")
+    text_model.lm_head = model.lm_head
+
+    _patch_mllama_memvr(text_model)
+
+    if len(text_model.layers) == 0:
+        raise ValueError("The Mllama text backbone has no decoder layers to patch.")
+
+    text_model.layers[0].mlp.apply_memvr = True
+    text_model.layers[0].mlp.starting_layer = starting_layer
+    text_model.layers[0].mlp.ending_layer = ending_layer
+    text_model.layers[0].mlp.entropy_threshold = entropy_threshold
+
+    for decoder_layer in text_model.layers:
+        decoder_layer.mlp.retracing_ratio = retracing_ratio
+
+    return model
+
+
+# ==================== Public API ====================
+
+def apply_memvr_to_loaded_model(
+    model,
+    starting_layer: int = 5,
+    ending_layer: int = 16,
+    entropy_threshold: float = 0.75,
+    retracing_ratio: float = 0.0,
+):
+    """
+    Apply MemVR patches to a loaded compatible Hugging Face VLM.
+
+    Args:
+        model: A loaded Qwen3-VL or Mllama conditional generation model instance.
+        starting_layer: First layer to monitor for entropy triggering (default: 5).
+        ending_layer: Last layer to monitor for entropy triggering (default: 16).
+        entropy_threshold: Entropy threshold for triggering vision retracing (default: 0.75).
+        retracing_ratio: Blend ratio for retracing adapter output (default: 0.0, i.e., disabled).
+
+    Returns:
+        The patched model (same instance, modified in-place).
+
+    Raises:
+        TypeError: If model does not have a supported structure.
+        ValueError: If language model has no decoder layers.
+    """
+    if hasattr(model, "model") and hasattr(model.model, "language_model"):
+        return _apply_memvr_to_qwen3_vl_model(
+            model,
+            starting_layer=starting_layer,
+            ending_layer=ending_layer,
+            entropy_threshold=entropy_threshold,
+            retracing_ratio=retracing_ratio,
+        )
+
+    if hasattr(model, "language_model") and hasattr(model, "vision_model"):
+        return _apply_memvr_to_mllama_model(
+            model,
+            starting_layer=starting_layer,
+            ending_layer=ending_layer,
+            entropy_threshold=entropy_threshold,
+            retracing_ratio=retracing_ratio,
+        )
+
+    raise TypeError("Expected a supported Hugging Face VLM with a language model stack compatible with MemVR.")
