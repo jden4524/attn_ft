@@ -240,18 +240,18 @@ def _patch_qwen3_vl_memvr(text_model, qwen3_model):
     text_model._memvr_handles = handles
 
 
-def _patch_mllama_memvr(causal_lm, text_backbone):
+def _patch_mllama_memvr(forward_module, text_backbone):
     """Register all MemVR hooks and patches on Mllama.
 
     Args:
-        causal_lm: MllamaForCausalLM — receives cross_attention_states in forward().
+        forward_module: Module whose forward() receives cross_attention_states.
+            This is MllamaTextModel in recent Transformers releases and
+            MllamaForCausalLM in older nested layouts.
         text_backbone: MllamaTextModel — holds .layers and .norm.
     """
-    if hasattr(causal_lm, "_memvr_handles"):
+    if hasattr(forward_module, "_memvr_handles"):
         return
 
-    # Pre-hook on causal_lm: it is the module whose forward() receives cross_attention_states.
-    # All layer/state operations are performed on text_backbone (MllamaTextModel).
     def _mllama_pre_hook(module, args, kwargs):
         cross_attention_states = kwargs.get("cross_attention_states", None)
         if cross_attention_states is not None:
@@ -275,8 +275,8 @@ def _patch_mllama_memvr(causal_lm, text_backbone):
         return output
 
     handles = [
-        causal_lm.register_forward_pre_hook(_mllama_pre_hook, with_kwargs=True),
-        causal_lm.register_forward_hook(_mllama_post_hook, with_kwargs=True),
+        forward_module.register_forward_pre_hook(_mllama_pre_hook, with_kwargs=True),
+        forward_module.register_forward_hook(_mllama_post_hook, with_kwargs=True),
     ]
 
     for layer_idx, decoder_layer in enumerate(text_backbone.layers):
@@ -286,7 +286,7 @@ def _patch_mllama_memvr(causal_lm, text_backbone):
             decoder_layer.mlp.forward = MethodType(_qwen3_vl_mlp_forward, decoder_layer.mlp)
         handles.append(decoder_layer.register_forward_hook(_make_qwen3_vl_layer_hook(text_backbone, layer_idx), with_kwargs=True))
 
-    causal_lm._memvr_handles = handles
+    forward_module._memvr_handles = handles
 
 
 def _apply_memvr_to_qwen3_vl_model(
@@ -329,26 +329,40 @@ def _apply_memvr_to_mllama_model(
     entropy_threshold: float,
     retracing_ratio: float,
 ):
-    # MllamaForConditionalGeneration
-    #   .model  →  MllamaModel
-    #     .language_model  →  MllamaForCausalLM   (causal_lm)
-    #       .model          →  MllamaTextModel     (text_backbone, has .layers / .norm)
-    #       .lm_head        →  Linear
-    #     .vision_model    →  MllamaVisionModel
     if not (hasattr(model, "model") and hasattr(model.model, "language_model") and hasattr(model.model, "vision_model")):
         raise TypeError("Expected a Hugging Face MllamaForConditionalGeneration with .model.language_model and .model.vision_model.")
 
-    causal_lm = model.model.language_model   # MllamaForCausalLM
+    language_model = model.model.language_model
 
-    if not hasattr(causal_lm, "model") or not hasattr(causal_lm, "lm_head"):
-        raise TypeError("MllamaForCausalLM is missing expected .model or .lm_head attributes.")
-
-    text_backbone = causal_lm.model   # MllamaTextModel: has .layers and .norm
+    # Transformers >= 4.57 uses a flattened layout:
+    #   MllamaForConditionalGeneration.lm_head
+    #   MllamaForConditionalGeneration.model.language_model -> MllamaTextModel
+    # Older releases use:
+    #   model.model.language_model -> MllamaForCausalLM
+    #   model.model.language_model.model -> MllamaTextModel
+    if hasattr(language_model, "layers") and hasattr(language_model, "norm") and hasattr(model, "lm_head"):
+        forward_module = language_model
+        text_backbone = language_model
+        lm_head = model.lm_head
+    elif (
+        hasattr(language_model, "model")
+        and hasattr(language_model, "lm_head")
+        and hasattr(language_model.model, "layers")
+        and hasattr(language_model.model, "norm")
+    ):
+        forward_module = language_model
+        text_backbone = language_model.model
+        lm_head = language_model.lm_head
+    else:
+        raise TypeError(
+            "Could not resolve the Mllama text backbone and lm_head from the loaded "
+            f"{type(model).__name__} layout."
+        )
 
     # Attach lm_head to text_backbone so the shared layer hook can compute entropy.
-    text_backbone.lm_head = causal_lm.lm_head
+    text_backbone.lm_head = lm_head
 
-    _patch_mllama_memvr(causal_lm, text_backbone)
+    _patch_mllama_memvr(forward_module, text_backbone)
 
     if len(text_backbone.layers) == 0:
         raise ValueError("The Mllama text backbone has no decoder layers to patch.")

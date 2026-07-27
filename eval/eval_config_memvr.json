@@ -13,26 +13,6 @@
     }
   },
   "data": {
-"MMVP": {
-      "class": "ImageMCQDataset",
-      "dataset": "MMVP"
-    },
-    "VStarBench": {
-      "class": "ImageMCQDataset",
-      "dataset": "VStarBench"
-    },
-    "RealWorldQA": {
-      "class": "ImageMCQDataset",
-      "dataset": "RealWorldQA"
-    },
-    "VisOnlyQA-VLMEvalKit": {
-      "class": "ImageMCQDataset",
-      "dataset": "VisOnlyQA-VLMEvalKit"
-    },
-    "HallusionBench": {
-      "class": "ImageYORNDataset",
-      "dataset": "HallusionBench"
-    },
     "POPE": {
       "class": "ImageYORNDataset",
       "dataset": "POPE"
