@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import random
+import warnings
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -327,16 +330,97 @@ class AttnBatch:
     labels: Optional[torch.Tensor] = None
 
 
+def _label_components(grid: np.ndarray) -> np.ndarray:
+    """4-connected component labels of a small boolean grid (0 = background)."""
+    labels = np.zeros(grid.shape, dtype=np.int32)
+    h, w = grid.shape
+    current = 0
+    for y0, x0 in zip(*np.nonzero(grid)):
+        if labels[y0, x0]:
+            continue
+        current += 1
+        labels[y0, x0] = current
+        queue = deque([(y0, x0)])
+        while queue:
+            y, x = queue.popleft()
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < h and 0 <= nx < w and grid[ny, nx] and not labels[ny, nx]:
+                    labels[ny, nx] = current
+                    queue.append((ny, nx))
+    return labels
+
+
+def _boxify_mask(mask: Image.Image, grid_size: int = 64) -> Image.Image:
+    """Replace each connected region of a mask by its bounding box.
+
+    Components are found on a coarse grid (longest side = grid_size) so that nearly
+    touching fragments of one object merge; box extents come from full-resolution pixels.
+    """
+    arr = np.array(mask.convert("L")) > 0
+    if not arr.any():
+        return mask
+    h, w = arr.shape
+    scale = grid_size / max(h, w)
+    gh, gw = max(1, round(h * scale)), max(1, round(w * scale))
+    coarse = np.array(mask.convert("L").resize((gw, gh), Image.Resampling.BOX)) > 0
+    labels = _label_components(coarse)
+    full_labels = np.array(Image.fromarray(labels).resize((w, h), Image.Resampling.NEAREST))
+
+    out = np.zeros((h, w), dtype=np.uint8)
+    for comp in range(1, int(labels.max()) + 1):
+        ys, xs = np.nonzero((full_labels == comp) & arr)
+        if ys.size == 0:
+            continue
+        out[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1] = 255
+    return Image.fromarray(out, mode="L")
+
+
+def _image_fingerprint(image: Image.Image) -> Tuple[Tuple[int, int], bytes]:
+    return image.size, image.convert("L").resize((8, 8), Image.Resampling.BILINEAR).tobytes()
+
+
+def _derange_masks(batch: List[Dict[str, Any]], max_tries: int = 100) -> List[Image.Image]:
+    """Give every sample the mask of a different image in the batch (shuffled-mask control)."""
+    n = len(batch)
+    if n < 2:
+        raise ValueError("mask_mode='shuffled' needs micro_batch_size >= 2")
+    prints = [_image_fingerprint(b["image"]) for b in batch]
+    for _ in range(max_tries):
+        order = list(range(n))
+        random.shuffle(order)
+        # cyclic shift over a random order is a derangement of sample indices
+        source = {order[i]: order[(i + 1) % n] for i in range(n)}
+        if all(prints[i] != prints[source[i]] for i in range(n)):
+            break
+    else:
+        warnings.warn("shuffled masks: some samples kept a mask from the same image in this batch")
+    return [batch[source[i]]["mask"] for i in range(n)]
+
+
 class AttnSupervisionCollator:
     def __init__(
         self,
         processor: Optional[Any],
         model_name: str,
+        mask_mode: str = "sam",
     ) -> None:
+        if mask_mode not in {"sam", "shuffled", "box"}:
+            raise ValueError(f"Unsupported mask_mode: {mask_mode}")
         self.processor = processor
         self.model_name = model_name
+        self.mask_mode = mask_mode
+
+    def _apply_mask_mode(self, batch: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if self.mask_mode == "sam":
+            return batch
+        if self.mask_mode == "box":
+            masks = [_boxify_mask(b["mask"]) for b in batch]
+        else:
+            masks = _derange_masks(batch)
+        return [{**b, "mask": m} for b, m in zip(batch, masks)]
 
     def __call__(self, batch: List[Dict[str, Any]]) -> AttnBatch:
+        batch = self._apply_mask_mode(batch)
         if "qwen" in self.model_name.lower():
             return self._collate_qwen(batch)
         if "llama-3.2" in self.model_name.lower() and "vision" in self.model_name.lower():

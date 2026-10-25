@@ -15,6 +15,7 @@ class DatasetConfig:
     image_field: str
     mask_root: str
     max_samples: Optional[int]
+    mask_mode: str
 
 
 @dataclass
@@ -30,6 +31,8 @@ class ModelConfig:
     attention_layer_decay: float
     grounding_head_calibration: bool
     calibration_batches: int
+    head_selection_scale: float
+    fixed_heads: Optional[Dict[int, List[int]]]
 
 
 @dataclass
@@ -84,6 +87,7 @@ def load_config(path: str | Path) -> Config:
         image_field=dset.get("image_field", "image"),
         mask_root=dset.get("mask_root", ""),
         max_samples=dset.get("max_samples"),
+        mask_mode=dset.get("mask_mode", "sam"),
     )
 
     model_cfg = ModelConfig(
@@ -98,6 +102,8 @@ def load_config(path: str | Path) -> Config:
         attention_layer_decay=model.get("attention_layer_decay", 0.2),
         grounding_head_calibration=model.get("grounding_head_calibration", False),
         calibration_batches=model.get("calibration_batches", 1),
+        head_selection_scale=float(model.get("head_selection_scale", 1.0)),
+        fixed_heads=model.get("fixed_heads"),
     )
 
     train_cfg = TrainConfig(

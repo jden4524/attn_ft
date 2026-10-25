@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import math
 import json
+from functools import partial
 from pathlib import Path
 import queue
 from typing import Any, Iterator
@@ -217,7 +218,9 @@ def train(config_path: str) -> None:
         probabilities = [p / total for p in probabilities]
         dataset = interleave_datasets(loaded_datasets, probabilities=probabilities, stopping_strategy="first_exhausted")
 
-    collator = AttnSupervisionCollator(processor=processor, model_name=cfg.model.name)
+    collator = AttnSupervisionCollator(
+        processor=processor, model_name=cfg.model.name, mask_mode=cfg.dataset.mask_mode
+    )
 
     dataloader_num_workers = _resolve_dataloader_workers(NUM_GPUS, cfg.train.local_test)
     dataloader_pin_memory = accelerator.device.type == "cuda"
@@ -239,8 +242,24 @@ def train(config_path: str) -> None:
         f"persistent_workers={dataloader_kwargs.get('persistent_workers', False)}"
     )
 
-    if guidance_enabled and cfg.model.grounding_head_calibration:
+    if guidance_enabled and cfg.model.fixed_heads:
+        # reuse the head set of a previous run so that only the supervision target differs
+        grounding_heads = {int(layer): sorted(int(h) for h in heads) for layer, heads in cfg.model.fixed_heads.items()}
+        accelerator.print("Using fixed grounding heads by layer:", grounding_heads)
+        attn_manager.attach(model, selected_heads_map=grounding_heads)
+    elif guidance_enabled and cfg.model.grounding_head_calibration:
         accelerator.print("Running grounding head calibration on the main process...")
+        # head selection always uses the segmentation masks, even for mask-control runs
+        calibration_loader = dataloader
+        if cfg.dataset.mask_mode != "sam":
+            calibration_loader = DataLoader(
+                dataset,
+                batch_size=cfg.train.micro_batch_size,
+                shuffle=True,
+                collate_fn=AttnSupervisionCollator(processor=processor, model_name=cfg.model.name),
+                num_workers=dataloader_num_workers,
+                pin_memory=dataloader_pin_memory,
+            )
         grounding_heads: dict[int, list[int]] = {}
         debug = {"num_candidates": 0, "selected": 0}
 
@@ -254,7 +273,7 @@ def train(config_path: str) -> None:
 
             scheduled_layer_ids, _ = build_layer_schedule(num_model_layers)
             scheduled_layer_id_set = set(scheduled_layer_ids)
-            calibration_iter = iter(dataloader)
+            calibration_iter = iter(calibration_loader)
             for _ in range(cfg.model.calibration_batches):
                 try:
                     batch = next(calibration_iter)
@@ -282,6 +301,7 @@ def train(config_path: str) -> None:
             grounding_heads, debug = select_grounding_heads(
                 head_stats,
                 allowed_layer_ids=scheduled_layer_ids,
+                scale=cfg.model.head_selection_scale,
             )
             model.train()
 
@@ -329,9 +349,10 @@ def train(config_path: str) -> None:
     # per-rank dataloader length after Accelerator.prepare(). Wrapping the
     # scheduler would advance it extra times in multi-GPU runs.
     
-    if cfg.train.loss != "suppress":
-        raise ValueError(f"Unsupported loss type: {cfg.train.loss}. This trainer only supports 'suppress'.")
-    attn_align_loss = soft_suppression_loss
+    loss_forms = {"suppress": "neglog", "suppress_squared": "squared"}
+    if cfg.train.loss not in loss_forms:
+        raise ValueError(f"Unsupported loss type: {cfg.train.loss}. Expected one of {sorted(loss_forms)}.")
+    attn_align_loss = partial(soft_suppression_loss, form=loss_forms[cfg.train.loss])
     if guidance_enabled:
         accelerator.print("Using soft suppression loss for attention alignment")
     else:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 source attn_ft/bin/activate
-CONFIG_PATH=configs/llama3_2_11b_vision_attn_ft.yaml
+CONFIG_PATH=${CONFIG_PATH:-configs/llama3_2_11b_vision_attn_ft.yaml}
 
 GPU_LIST=${AVAILABLE_GPUS:-${CUDA_VISIBLE_DEVICES:-}}
 if [ -n "$GPU_LIST" ]; then

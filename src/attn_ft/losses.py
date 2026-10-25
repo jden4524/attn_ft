@@ -72,7 +72,10 @@ def soft_suppression_loss(
     target: list[torch.Tensor],
     per_head: bool = False,
     temp: float = 1.0,
+    form: str = "neglog",
 ) -> torch.Tensor | tuple[torch.Tensor, int]:
+    """Region-mass loss. form="neglog" gives -log p_R; form="squared" gives (1 - p_R)^2
+    (A3Tune-style) with the same in-mask mass p_R."""
     packed = _prepare_padded_inputs(pred, target)
     if packed is None:
         return _zero_like(pred, target)
@@ -80,6 +83,8 @@ def soft_suppression_loss(
     logits, targets, text_mask, image_mask, zero = packed
     if temp <= 0:
         raise ValueError(f"temp must be > 0, got {temp}")
+    if form not in {"neglog", "squared"}:
+        raise ValueError(f"Unsupported loss form: {form}")
 
     valid_image = image_mask[:, None, None, :]
     target_4d = targets[:, None, None, :]
@@ -91,6 +96,8 @@ def soft_suppression_loss(
     log_sum_pos = torch.logsumexp(pos_logits, dim=-1)
     log_sum_neg = torch.logsumexp(neg_logits, dim=-1)
     loss_per_text = torch.logaddexp(log_sum_pos, log_sum_neg) - log_sum_pos
+    if form == "squared":
+        loss_per_text = (1.0 - torch.exp(-loss_per_text)) ** 2
 
     valid_text = text_mask[:, None, :]
     masked_loss = loss_per_text * valid_text

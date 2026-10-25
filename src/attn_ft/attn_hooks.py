@@ -137,7 +137,41 @@ def _elbow_threshold(values: torch.Tensor, prefer: str, threshold_pct: float = 0
     return float(sorted_values[elbow_idx].item()), elbow_idx
 
 
-def select_grounding_heads(head_stats, allowed_layer_ids: list[int] | None = None):
+def _scaled_thresholds(
+    mass_values: torch.Tensor,
+    alignment_values: torch.Tensor,
+    mass_elbow_idx: int,
+    alignment_elbow_idx: int,
+    scale: float,
+) -> tuple[float, float]:
+    """Move both elbow cut-offs by a common factor so the selected set is ~scale x its size."""
+    mass_sorted, _ = torch.sort(mass_values, descending=True)
+    align_sorted, _ = torch.sort(alignment_values)
+    n = mass_sorted.numel()
+
+    def cut(c: float) -> tuple[float, float]:
+        m_idx = min(n - 1, max(0, round((mass_elbow_idx + 1) * c) - 1))
+        a_idx = min(n - 1, max(0, round((alignment_elbow_idx + 1) * c) - 1))
+        return float(mass_sorted[m_idx]), float(align_sorted[a_idx])
+
+    def count(thresholds: tuple[float, float]) -> int:
+        m_t, a_t = thresholds
+        return int(((mass_values >= m_t) & (alignment_values <= a_t)).sum())
+
+    base = count(cut(1.0))
+    target = max(1, round(base * scale))
+    best = min(
+        (cut(float(c)) for c in torch.linspace(0.05, 10.0, 2000)),
+        key=lambda t: abs(count(t) - target),
+    )
+    return best
+
+
+def select_grounding_heads(
+    head_stats,
+    allowed_layer_ids: list[int] | None = None,
+    scale: float = 1.0,
+):
     allowed_layer_set = set(allowed_layer_ids) if allowed_layer_ids is not None else None
     candidates = [
         {
@@ -165,6 +199,10 @@ def select_grounding_heads(head_stats, allowed_layer_ids: list[int] | None = Non
 
     mass_thresh, mass_elbow_idx = _elbow_threshold(mass_values, prefer="high", threshold_pct=1.0)
     alignment_thresh, alignment_elbow_idx = _elbow_threshold(alignment_values, prefer="low", threshold_pct=1.0)
+    if scale != 1.0:
+        mass_thresh, alignment_thresh = _scaled_thresholds(
+            mass_values, alignment_values, mass_elbow_idx, alignment_elbow_idx, scale
+        )
 
     selected = [c for c in candidates if c["mass"] >= mass_thresh and c["alignment"] <= alignment_thresh]
 
@@ -181,6 +219,7 @@ def select_grounding_heads(head_stats, allowed_layer_ids: list[int] | None = Non
         "mass_elbow_idx": mass_elbow_idx,
         "alignment_elbow_idx": alignment_elbow_idx,
         "selection_method": "elbow",
+        "selection_scale": scale,
     }
     return selected_map, debug
 
