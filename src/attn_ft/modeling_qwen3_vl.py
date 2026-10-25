@@ -42,6 +42,8 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import check_model_inputs
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig, Qwen3VLTextConfig, Qwen3VLVisionConfig
 
+from attn_ft import var as _var
+
 
 class Qwen3VLVisionMLP(nn.Module):
     def __init__(self, config):
@@ -160,6 +162,8 @@ def eager_attention_forward(
     if return_raw_attn_weights:
         attn_weights_raw = attn_weights
     attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    if _var.is_active():
+        attn_weights = _var.redistribute(attn_weights, getattr(module, "layer_idx", None))
     attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
@@ -865,8 +869,14 @@ class Qwen3VLTextModel(Qwen3VLPreTrainedModel):
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+        var_prefill = _var.is_active() and int(cache_position[0]) == 0
+        if var_prefill:
+            _var.begin_prefill(visual_pos_masks, len(self.layers))
+
         # decoder layers
         for layer_idx, decoder_layer in enumerate(self.layers):
+            if var_prefill:
+                _var.record_sinks(hidden_states, layer_idx)
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
