@@ -371,7 +371,7 @@ def train(config_path: str) -> None:
     target_attn_layer = cfg.model.attention_layers
     if guidance_enabled and cfg.model.guide_layers == "all":
         accelerator.print(f"Using all attention layers with exponential decay={cfg.model.attention_layer_decay}")
-    elif guidance_enabled and cfg.model.guide_layers == "midlate":
+    elif guidance_enabled and cfg.model.guide_layers == "midlate" and not use_a3tune:
         accelerator.print(f"Using mid-to-late attention layers with exponential decay={cfg.model.attention_layer_decay}")
     # else:
     #     accelerator.print("Using attention layer index", target_attn_layer, "for supervision")
