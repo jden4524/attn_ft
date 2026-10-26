@@ -8,4 +8,5 @@ notebooks/
 legacy/
 wandb/
 data/
-.codexvast_state.json
+.codex
+vast_state.json

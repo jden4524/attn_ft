@@ -633,13 +633,16 @@ def main() -> None:
         upload_thread = threading.Thread(target=upload_worker, daemon=False, args=(REPO_ID, bool(runs_repo)))
         upload_thread.start()
 
-    train(args.config)
-
-    if is_main_process and upload_thread is not None:
-        upload_queue.join()
-        upload_queue.put(None)
-        # makes sure all uploads are done before exiting
-        upload_thread.join()
+    try:
+        train(args.config)
+    finally:
+        # also on a crash: the upload thread is not a daemon, so without the stop signal the
+        # process would hang (and keep a rented GPU billing) until the job timeout
+        if is_main_process and upload_thread is not None:
+            upload_queue.join()
+            upload_queue.put(None)
+            # makes sure all uploads are done before exiting
+            upload_thread.join()
 
 
 if __name__ == "__main__":
