@@ -132,6 +132,7 @@ def train(config_path: str) -> None:
         )
 
     layer_ids, _ = build_layer_schedule(num_language_layers)
+    vocab_size = int(getattr(getattr(model_cfg, "text_config", model_cfg), "vocab_size"))
 
     wandb_run = "wandb" if cfg.train.wandb_enabled else None
     
@@ -424,7 +425,15 @@ def train(config_path: str) -> None:
             for batch in micro_batches:
                 with accelerator.accumulate(model):
                     batch.inputs = move_inputs_to_device(batch.inputs, accelerator.device, non_blocking=dataloader_pin_memory)
-                    labels = batch.labels.to(accelerator.device, non_blocking=dataloader_pin_memory)
+                    # a label outside the vocabulary trips a device-side assert in cross_entropy and
+                    # kills the run (seen once at step ~6560 of a3tune_core): mask and report it
+                    bad = (batch.labels != -100) & ((batch.labels < 0) | (batch.labels >= vocab_size))
+                    if bad.any():
+                        accelerator.print(f"WARNING step {step}: {int(bad.sum())} labels outside [0, {vocab_size}) "
+                                          f"masked; values {batch.labels[bad][:8].tolist()}, answers "
+                                          f"{[a[:80] for a in batch.answers]}")
+                        batch.labels[bad] = -100
+                    labels = batch.labels.to(accelerator.device)
 
                     if is_minicpm:
                         outputs = model(data=batch.inputs)
