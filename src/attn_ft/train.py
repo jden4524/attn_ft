@@ -339,6 +339,9 @@ def train(config_path: str) -> None:
     )
     steps_per_epoch = len(dataloader) // cfg.train.grad_accum_steps
     total_training_steps = steps_per_epoch * cfg.train.num_epochs
+    max_steps = _read_env_int("ATTN_FT_MAX_STEPS")  # optional cap, e.g. for smoke tests
+    if max_steps is not None:
+        total_training_steps = min(total_training_steps, max_steps)
     scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(
         optimizer,
         num_warmup_steps=cfg.train.warmup_steps,
@@ -560,34 +563,36 @@ def train(config_path: str) -> None:
 upload_queue = queue.Queue()
 api = HfApi()
     
-def upload_worker(repo):
-    """Background worker that processes the upload queue one by one."""
+def upload_worker(repo, per_run_folders=False):
+    """Background worker that processes the upload queue one by one.
+
+    With per_run_folders, each checkpoint goes to checkpoints/<run_name>/step-<step> so that
+    several runs can share one repo; otherwise it replaces the repo root (one commit per step).
+    """
     while True:
         # Get upload task (folder_path, step_number)
         task = upload_queue.get()
         if task is None:
             upload_queue.task_done()
             break  # Graceful shutdown signal
-        
+
         folder_path, metadata = task
-        # print(f"[UPLOADER] Starting upload for Step {step}...")
-        
-        try:
-            api.upload_folder(
-                folder_path=folder_path,
-                repo_id=repo,
-                commit_message=f"loss: {metadata['loss']}, run name: {metadata['message']}, Step {metadata['step']}",
-                repo_type="model"
-            )
-            # print(f"[UPLOADER] Step {step} uploaded successfully.")
-            
-            shutil.rmtree(folder_path)
-            
-        except Exception as e:
-            print(f"[UPLOADER] Failed to upload Step {metadata['step']}: {e}")
-            # Optional: You could re-add it to the queue to retry
-            # upload_queue.put(task) 
-        
+        path_in_repo = f"checkpoints/{metadata['message']}/step-{metadata['step']}" if per_run_folders else None
+
+        for attempt in range(3):
+            try:
+                api.upload_folder(
+                    folder_path=folder_path,
+                    repo_id=repo,
+                    path_in_repo=path_in_repo,
+                    commit_message=f"loss: {metadata['loss']}, run name: {metadata['message']}, Step {metadata['step']}",
+                    repo_type="model"
+                )
+                shutil.rmtree(folder_path)
+                break
+            except Exception as e:
+                print(f"[UPLOADER] Failed to upload Step {metadata['step']} (attempt {attempt + 1}/3): {e}")
+
         upload_queue.task_done()
 
 
@@ -612,7 +617,10 @@ def main() -> None:
     is_main_process = int(os.environ.get("RANK", "0")) == 0
     cfg = load_config(args.config)
     model_name_lower = cfg.model.name.lower()
-    if "qwen" in model_name_lower:
+    runs_repo = os.environ.get("HF_RUNS_REPO")
+    if runs_repo:
+        REPO_ID = runs_repo
+    elif "qwen" in model_name_lower:
         REPO_ID = "Jackie2235/Qwen3-VL-8B-Instruct_attn_ft"
     elif "minicpm" in model_name_lower:
         REPO_ID = "Jackie2235/MiniCPM-attn_ft"
@@ -622,7 +630,7 @@ def main() -> None:
         raise ValueError(f"Cannot determine repo for model {cfg.model.name} from config {args.config}")
     upload_thread = None
     if is_main_process:
-        upload_thread = threading.Thread(target=upload_worker, daemon=False, args=(REPO_ID,))
+        upload_thread = threading.Thread(target=upload_worker, daemon=False, args=(REPO_ID, bool(runs_repo)))
         upload_thread.start()
 
     train(args.config)

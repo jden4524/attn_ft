@@ -1,8 +1,8 @@
 # Qwen3-VL-2B ablation runs
 
-All runs share the reference sPMC setup in `qwen3_vl_2b_spmc.yaml` and change one thing.
-Before launching, make the reference match the paper's Qwen3-VL-2B sPMC run (`loss_weight`,
-LoRA targets, calibration batches), then copy those values into every file here.
+All runs share the reference sPMC setup in `qwen3_vl_2b_spmc.yaml` (LoRA r=16 on q/k of the last 40% of layers,
+the same 72 fixed heads, lambda=1, seed 42) and change one thing.
+These runs form a standalone controlled study; they are not meant to reproduce the paper's numbers.
 
 | Config | What changes |
 |---|---|
@@ -14,14 +14,15 @@ LoRA targets, calibration batches), then copy those values into every file here.
 | `qwen3_vl_2b_spmc_squared_loss.yaml` | `(1 - p_R)^2` instead of `-log p_R`, same in-mask mass `p_R` |
 | `qwen3_vl_2b_spmc_heads_x0.5.yaml` / `_x2.yaml` | Both selection thresholds moved so the selected set is about half / double its size |
 
-Head selection always uses the SAM3 masks, also in the shuffled and box runs. To supervise exactly
-the heads of the reference run, paste its logged "Selected grounding heads by layer" dict into
-`fixed_heads` (not for the `heads_x*` runs, which must re-select).
+`fixed_heads` holds the 72 heads selected on the base model, so every run supervises the same heads
+and calibration is skipped. The `heads_x*` runs leave it unset and re-select (calibration always
+uses the SAM3 masks, also when the run itself trains on shuffled or box masks).
 
-Launch one run:
+Launch one run. `HF_RUNS_REPO` sends checkpoints to `checkpoints/<run_name>/step-<step>` in that repo;
+`ATTN_FT_MAX_STEPS` caps the number of optimizer steps (for smoke tests):
 
 ```bash
-CONFIG_PATH=configs/ablations/qwen3_vl_2b_spmc_shuffled_masks.yaml bash scripts/train.sh
+HF_RUNS_REPO=<user>/<repo> CONFIG_PATH=configs/ablations/qwen3_vl_2b_spmc_shuffled_masks.yaml bash scripts/train.sh
 ```
 
 Grounded-SAM 2 masks (one shard per GPU, then merge and push):

@@ -7,7 +7,7 @@ model:
   lora_r: 16
   lora_alpha: 16
   lora_dropout: 0.1
-  lora_target_modules: [q_proj,v_proj]
+  lora_target_modules: [q_proj,k_proj]
   attention_layers:
     -2: 0.4
     -4: 0.2
@@ -19,10 +19,9 @@ model:
   grounding_head_calibration: true
   calibration_batches: 50
   head_selection_scale: 1.0
-  # Paste the "Selected grounding heads by layer" dict from the sPMC run log here
-  # (e.g. {16: [3, 7], 17: [0]}) so the run supervises exactly the same heads.
-  # Leave null to re-run calibration.
-  fixed_heads: null
+  # The 72 heads selected on the base model (calibration statistics over 973 training samples),
+  # fixed in advance so every run supervises and is measured on the same heads.
+  fixed_heads: {16: [5, 6, 7, 8, 9, 13, 14, 15], 17: [1, 2, 8, 10, 11, 12], 18: [2, 3, 4, 5, 11], 19: [4, 5, 9, 13], 20: [3, 4, 6, 8, 11, 12, 13, 14, 15], 21: [1, 8, 9, 12, 13, 15], 22: [4, 7, 9, 12], 23: [0, 1, 4, 6, 14, 15], 24: [6, 7, 10, 11, 12, 13, 14, 15], 25: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 26: [2, 3, 4, 5, 8, 14]}
 
 train:
   run_name: Qwen3-VL-2B_spmc_box_masks
