@@ -1,12 +1,13 @@
 """Compare vstar_grounding.py outputs across conditions (paired on the V* questions).
 
 Per condition: in-box attention share and pointing accuracy of the selected heads (target-name
-tokens), knockout margin drops, answer-format mass, crop hit rates. Per pair of conditions:
+tokens; `_own` variants use the heads a run supervises, given with --own-heads, else the common set), knockout margin drops, answer-format mass, crop hit rates. Per pair of conditions:
 Wilcoxon signed-rank tests on the per-question values (questions present in both files).
 
 Usage: python eval/vstar_compare.py --heads heads.json --out summary.json \
            base=base.jsonl spmc_s2000=spmc_2000.jsonl shuffled_s2000=shuf_2000.jsonl ...
        [--pairs spmc_s2000:shuffled_s2000 spmc_s2000:autor_s2000]   (default: all pairs)
+       [--own-heads a3tune=heads_a3tune.json]   (runs whose name starts with the prefix)
 """
 import argparse
 import itertools
@@ -19,20 +20,26 @@ LAYERS = list(range(16, 28))
 KNOCK = ("sel_inbox", "rand_inbox_0", "rand_inbox_1", "sel_outbox")
 
 
-def per_question(rows, selected):
+def head_means(r, heads):
+    inbox, hit = [], []
+    for l in LAYERS:
+        ph = r["per_head"][str(l)]
+        for h in heads.get(l, []):
+            if ph["name_inbox"] is not None:
+                inbox.append(ph["name_inbox"][h])
+                hit.append(ph["name_hit"][h])
+    return (np.mean(inbox), np.mean(hit)) if inbox else (np.nan, np.nan)
+
+
+def per_question(rows, selected, own=None):
     """question_id -> metric dict."""
     out = {}
     for r in rows:
-        inbox, hit = [], []
-        for l in LAYERS:
-            ph = r["per_head"][str(l)]
-            for h in selected.get(l, []):
-                if ph["name_inbox"] is not None:
-                    inbox.append(ph["name_inbox"][h])
-                    hit.append(ph["name_hit"][h])
+        inbox, hit = head_means(r, selected)
+        inbox_own, hit_own = head_means(r, own) if own else (inbox, hit)
         m = {
-            "inbox_share": np.mean(inbox) if inbox else np.nan,
-            "pointing_acc": np.mean(hit) if hit else np.nan,
+            "inbox_share": inbox, "pointing_acc": hit,
+            "inbox_share_own": inbox_own, "pointing_acc_own": hit_own,
             "correct": float(r["pred"] == r["label"]),
             "format_mass": r["format_mass"],
             "margin": r["margin"],
@@ -55,14 +62,18 @@ def main():
     ap.add_argument("--heads", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--pairs", nargs="*")
+    ap.add_argument("--own-heads", action="append", default=[], help="prefix=heads.json (repeatable)")
     ap.add_argument("runs", nargs="+", help="name=path.jsonl")
     args = ap.parse_args()
-    selected = {int(k): v for k, v in json.load(open(args.heads)).items()}
+    load = lambda path: {int(k): v for k, v in json.load(open(path)).items()}  # noqa: E731
+    selected = load(args.heads)
+    own = [(spec.split("=", 1)[0], load(spec.split("=", 1)[1])) for spec in args.own_heads]
 
     data = {}
     for spec in args.runs:
         name, path = spec.split("=", 1)
-        data[name] = per_question([json.loads(l) for l in open(path)], selected)
+        run_heads = next((h for prefix, h in own if name.startswith(prefix)), None)
+        data[name] = per_question([json.loads(l) for l in open(path)], selected, run_heads)
 
     summary = {"conditions": {}, "pairs": {}}
     for name, q in data.items():
@@ -90,7 +101,7 @@ def main():
     json.dump(summary, open(args.out, "w"), indent=1)
     for name, c in summary["conditions"].items():
         print(name, {k: round(v, 4) for k, v in c.items() if k in
-                     ("n", "inbox_share", "pointing_acc", "drop_sel_inbox", "drop_sel_minus_rand", "format_mass",
+                     ("n", "inbox_share", "pointing_acc", "inbox_share_own", "pointing_acc_own", "drop_sel_inbox", "drop_sel_minus_rand", "format_mass",
                       "correct", "crop_name_half", "crop_last_half")})
     for p, res in summary["pairs"].items():
         print(p, {k: (round(v["mean_diff"], 4), f"p={v['wilcoxon_p']:.3g}") for k, v in res.items()
