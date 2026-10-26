@@ -4,6 +4,7 @@
            container exits when the job ends), watch its log, destroy the instance on probe
            failure / job end / timeout, retry on another host if the probe fails
            (with --eval-runs: a V* evaluation job on the runs' checkpoints instead, see eval_vstar.py)
+  resume   watch a job of the ledger again (same --timeout-min and --budget as its launch)
   status   show the spend ledger and our running instances
   destroy-all  destroy every instance this tool created
 
@@ -250,6 +251,21 @@ def launch(args: argparse.Namespace) -> None:
     raise SystemExit("gave up after repeated probe failures")
 
 
+def resume(args: argparse.Namespace) -> None:
+    """Watch a job of the ledger whose watcher was stopped (e.g. to move it to a detached process)."""
+    state = load_state()
+    job = next((j for j in reversed(state["jobs"]) if j["name"] == args.name and not j.get("ended")), None)
+    if job is None:
+        raise SystemExit(f"no running job named {args.name} in {STATE}")
+    try:
+        watch(job, state, args.timeout_min, args.budget)
+    except BaseException:
+        destroy(job["instance"])
+        job["ended"], job["outcome"] = time.time(), "orchestrator_error"
+        save_state(state)
+        raise
+
+
 def status(_: argparse.Namespace) -> None:
     state = load_state()
     for job in state["jobs"]:
@@ -285,6 +301,11 @@ def main() -> None:
     p.add_argument("--max-attempts", type=int, default=3)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=launch)
+    p = sub.add_parser("resume")
+    p.add_argument("--name", required=True)
+    p.add_argument("--timeout-min", type=int, default=240)
+    p.add_argument("--budget", type=float, required=True)
+    p.set_defaults(func=resume)
     sub.add_parser("status").set_defaults(func=status)
     sub.add_parser("destroy-all").set_defaults(func=destroy_all)
     args = parser.parse_args()

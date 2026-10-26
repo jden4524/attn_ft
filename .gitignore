@@ -9,4 +9,4 @@ legacy/
 wandb/
 data/
 .codex
-vast_state.json
+vast_state*.json
