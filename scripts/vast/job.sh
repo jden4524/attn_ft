@@ -6,7 +6,8 @@
 # (CONTAINER_ID / CONTAINER_API_KEY are set by vast.ai); the orchestrator destroys it as well.
 #
 # Environment: HF_TOKEN, HF_RUNS_REPO, JOB_NAME, JOB_CONFIG, JOB_TIMEOUT_MIN,
-# optional ATTN_FT_MAX_STEPS and PROBE_* thresholds (see probe.py).
+# optional ATTN_FT_MAX_STEPS, JOB_EVAL_RUNS / JOB_EVAL_STEPS (see eval_vstar.py) and PROBE_* thresholds
+# (see probe.py).
 set -uo pipefail
 cd /root/attn_ft
 LOG=/root/job.log
@@ -50,7 +51,11 @@ python scripts/vast/probe.py || finish probe_failed 3
 pip install -q "transformers<5.0.0" "datasets<4.0.0" accelerate peft pyyaml wandb torchvision || {
     finish install_failed 4; }
 
-timeout "${JOB_TIMEOUT_MIN}m" python src/attn_ft/train.py --config "$JOB_CONFIG"
+if [ -n "${JOB_EVAL_RUNS:-}" ]; then  # evaluation job: V* on the checkpoints of these runs
+    timeout "${JOB_TIMEOUT_MIN}m" python scripts/vast/eval_vstar.py
+else
+    timeout "${JOB_TIMEOUT_MIN}m" python src/attn_ft/train.py --config "$JOB_CONFIG"
+fi
 rc=$?
 if [ "$rc" -eq 0 ]; then status=ok; elif [ "$rc" -eq 124 ]; then status=timeout; else status=failed; fi
 finish "$status" "$rc"

@@ -3,6 +3,7 @@
   launch   package the current commit, pick a filtered offer, start the job in args mode (the
            container exits when the job ends), watch its log, destroy the instance on probe
            failure / job end / timeout, retry on another host if the probe fails
+           (with --eval-runs: a V* evaluation job on the runs' checkpoints instead, see eval_vstar.py)
   status   show the spend ledger and our running instances
   destroy-all  destroy every instance this tool created
 
@@ -213,6 +214,10 @@ def launch(args: argparse.Namespace) -> None:
                **probe_env(args.gpu)}
         if args.max_steps:
             env["ATTN_FT_MAX_STEPS"] = str(args.max_steps)
+        if args.eval_runs:
+            env["JOB_EVAL_RUNS"] = args.eval_runs
+        if args.eval_steps:
+            env["JOB_EVAL_STEPS"] = args.eval_steps
         try:
             iid = create(offer, env, args.name, args.disk, args.dry_run)
         except RuntimeError as exc:
@@ -274,6 +279,8 @@ def main() -> None:
     p.add_argument("--disk", type=int, default=100)
     p.add_argument("--timeout-min", type=int, default=240)
     p.add_argument("--max-steps", type=int)
+    p.add_argument("--eval-runs", help="V* evaluation job for these run names instead of training (eval_vstar.py)")
+    p.add_argument("--eval-steps", help="comma-separated checkpoint steps (default 2000,4000,6000,8000 + last)")
     p.add_argument("--budget", type=float, required=True, help="total USD across all jobs in the ledger")
     p.add_argument("--max-attempts", type=int, default=3)
     p.add_argument("--dry-run", action="store_true")

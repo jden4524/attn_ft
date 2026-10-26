@@ -525,6 +525,9 @@ def train(config_path: str) -> None:
                         avg_lm = lm_metric_total / log_steps
                         avg_attn = attn_metric_total / log_steps
                         avg_total = total_metric_total / log_steps
+                        # also to stdout, for unattended jobs that run with wandb disabled
+                        accelerator.print(f"step {step}/{total_training_steps} lm_loss={avg_lm:.4f} "
+                                          f"attn_align_loss={avg_attn:.4f} lr={scheduler.get_last_lr()[0]:.2e}")
                         accelerator.log(
                             {
                                 "lm_loss": avg_lm,
