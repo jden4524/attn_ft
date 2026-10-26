@@ -146,7 +146,7 @@ def destroy(iid: int) -> None:
 def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
     """Poll until the job ends; returns the outcome and destroys the instance."""
     iid, created = job["instance"], job["created"]
-    probe_seen = False
+    probe_seen = started = False
     while True:
         time.sleep(60)
         text = logs(iid)
@@ -157,6 +157,7 @@ def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
             print(f"show instance {iid}: {exc}")
         status = info.get("actual_status")
         elapsed = (time.time() - created) / 60
+        started = started or "JOB_START" in text
         for line in text.splitlines():
             if line.startswith("PROBE_RESULT") and not probe_seen:
                 probe_seen = True
@@ -171,6 +172,9 @@ def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
             outcome = f"container_{status}"
         elif status != "running" and elapsed > 20:
             outcome = "never_started"
+        elif status == "running" and not started and elapsed > 12:
+            # the bootstrap (code download from the hub) failed and the container keeps restarting
+            outcome = "bootstrap_failed"
         elif elapsed > timeout_min + 30:
             outcome = "orchestrator_timeout"
         elif spent(state) > budget:
@@ -219,7 +223,7 @@ def launch(args: argparse.Namespace) -> None:
             job["ended"], job["outcome"] = time.time(), "orchestrator_error"
             save_state(state)
             raise
-        if outcome in ("probe_failed", "never_started"):
+        if outcome in ("probe_failed", "never_started", "bootstrap_failed"):
             state["blacklist"].append(offer["machine_id"])
             save_state(state)
             continue

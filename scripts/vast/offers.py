@@ -5,7 +5,7 @@ Filters (all from the public offer fields):
   dlperf >= 90% of the median for that GPU model (broken or throttled cards score far lower);
   power limit >= 90% of the model's rated board power (power-capped cards);
   measured download >= 500 Mbps; traffic <= $0.005/GB down and $0.01/GB up;
-  disk >= 100 GB, enough CPU cores and RAM for the job, rentable for >= 1 day.
+  disk >= 100 GB, enough CPU cores and RAM for the job, rentable for >= 1 day, not in mainland China.
 Offers are ranked by hourly price plus the traffic cost of the expected download.
 
 Usage: python scripts/vast/offers.py "RTX PRO 6000 WS" [--top 10]
@@ -51,6 +51,8 @@ def filter_offers(offers: list[dict], min_cores: int = 8, min_ram_gb: int = 64) 
         "disk": lambda o: (o.get("disk_space") or 0) >= 100,
         "cpu": lambda o: (o.get("cpu_cores_effective") or 0) >= min_cores and (o.get("cpu_ram") or 0) >= min_ram_gb * 1000,
         "duration": lambda o: (o.get("duration") or 0) >= 86_400,
+        # the Hugging Face hub is not reachable from mainland China (code, model and data come from it)
+        "region": lambda o: not str(o.get("geolocation") or "").endswith(", CN"),
     }
     rejected = {name: 0 for name in checks}
     kept = []
