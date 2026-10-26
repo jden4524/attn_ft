@@ -46,7 +46,8 @@ BOOTSTRAP = (
 
 def vast(*args: str) -> str:
     key = os.environ["VAST_API_KEY"]
-    out = subprocess.run(["vastai", *args, "--api-key", key], capture_output=True, text=True)
+    # the key goes before the subcommand: `create instance ... --args` consumes every later token
+    out = subprocess.run(["vastai", "--api-key", key, *args], capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"vastai {args[:2]} failed: {out.stderr.strip() or out.stdout.strip()}")
     return out.stdout
@@ -126,10 +127,19 @@ def logs(iid: int) -> str:
 
 
 def destroy(iid: int) -> None:
-    try:
-        vast("destroy", "instance", str(iid))
-    except RuntimeError as exc:
-        print(f"destroy {iid}: {exc}")
+    # -y: without it the CLI waits for a confirmation nobody gives and the instance keeps billing
+    for attempt in range(5):
+        try:
+            vast("destroy", "instance", str(iid), "-y")
+        except RuntimeError as exc:
+            print(f"destroy {iid} (attempt {attempt + 1}): {exc}")
+        try:
+            if iid not in [inst["id"] for inst in json.loads(vast("show", "instances", "--raw"))]:
+                return
+        except RuntimeError as exc:
+            print(f"show instances: {exc}")
+        time.sleep(10 * (attempt + 1))
+    print(f"WARNING: instance {iid} still exists after destroy; run destroy-all")
 
 
 def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
@@ -200,7 +210,14 @@ def launch(args: argparse.Namespace) -> None:
                "traffic_usd": offer["traffic_usd"], "created": time.time(), "config": args.config}
         state["jobs"].append(job)
         save_state(state)
-        outcome = watch(job, state, args.timeout_min, args.budget)
+        try:
+            outcome = watch(job, state, args.timeout_min, args.budget)
+        except BaseException:
+            # never leave a billing instance behind when the watcher itself dies
+            destroy(iid)
+            job["ended"], job["outcome"] = time.time(), "orchestrator_error"
+            save_state(state)
+            raise
         if outcome in ("probe_failed", "never_started"):
             state["blacklist"].append(offer["machine_id"])
             save_state(state)
