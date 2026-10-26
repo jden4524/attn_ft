@@ -1,0 +1,45 @@
+# Smoke test only (a3tune_core): tiny batches, a checkpoint every 10 steps; run with ATTN_FT_MAX_STEPS.
+dataset:
+  hf_dataset_id: [Jackie2235/RLAIF-V-SEG, Jackie2235/flickr30k_attn_ft]
+  mask_mode: sam
+
+model:
+  name: Qwen/Qwen3-VL-2B-Instruct
+  lora_r: 16
+  lora_alpha: 16
+  lora_dropout: 0.1
+  lora_target_modules: [q_proj,k_proj]
+  attention_layers:
+    -2: 0.4
+    -4: 0.2
+    -6: 0.2
+    -8: 0.2
+  attention_heads: []
+  guide_layers: midlate
+  attention_layer_decay: 0.1
+  grounding_head_calibration: true
+  calibration_batches: 50
+  head_selection_scale: 1.0
+  # A3Tune-style heads (Chang et al., 2025, Eq. 8): the top 72 of the same 192 late-layer candidates by
+  # visual attention ratio on the base model (session1/results/selected_heads_a3tune_style.json),
+  # size-matched to the 72 sPMC heads.
+  fixed_heads: {16: [5, 6, 7, 8, 9, 12, 13], 17: [0, 1, 2, 3, 8, 9, 10, 11, 12, 13], 18: [2, 11], 19: [5, 7, 9, 13], 20: [4, 5, 6, 7, 8, 12, 13, 14, 15], 21: [0, 1, 4, 12, 13, 14, 15], 22: [4, 5, 7, 8, 9, 11, 12], 23: [0, 1, 14, 15], 24: [7, 10, 11, 12, 13, 14], 25: [5, 6, 8, 9, 10, 12, 13], 26: [0, 2, 3, 4, 5, 7, 8, 14, 15]}
+
+train:
+  run_name: smoke_qwen3_vl_2b_a3tune_core
+  # A3Tune core: full-row softmax, uniform average over the heads and phrase tokens, (1 - p)^2
+  loss: a3tune_core
+  # A3Tune's default lambda (Chang et al., 2025, App. C.2)
+  loss_weight: 0.1
+  seed: 42
+  micro_batch_size: 2
+  effective_batch_size: 4
+  num_epochs: 1
+  lr: 1.0e-4
+  weight_decay: 0.1
+  warmup_steps: 2
+  log_every: 10
+  save_every: 10
+  wandb_enabled: true
+  wandb_project: attn_ft
+  local_test: false

@@ -75,6 +75,22 @@ def extract_t2i_attn_valid(
     return extracted, masks
 
 
+def extract_t2i_rows(
+    attn: torch.Tensor,
+    batch: AttnBatch,
+) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
+    """Full attention-logit rows (all keys) of the supervised tokens, with each sample's image-token
+    indices and mask, for losses that softmax over the whole row (a3tune_core). Qwen3-VL only."""
+    if batch.vision_patch_masks is not None or batch.vision_token_targets is not None:
+        raise ValueError("full-row extraction supports image-token models (Qwen3-VL) only")
+    rows, image_indices, masks = [], [], []
+    for batch_idx in batch.valid_supervision_indices:
+        rows.append(attn[batch_idx][:, batch.token_spans[batch_idx], :])
+        image_indices.append(batch.image_token_indices[batch_idx])
+        masks.append(batch.masks[batch_idx])
+    return rows, image_indices, masks
+
+
 def update_head_stats(head_stats, layer_idx, t2i_attn, label):
     if not t2i_attn:
         return

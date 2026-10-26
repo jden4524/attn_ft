@@ -24,12 +24,13 @@ import os
 from attn_ft.attn_hooks import (
     AttnHookManager,
     extract_t2i_attn_valid,
+    extract_t2i_rows,
     select_grounding_heads,
     update_head_stats,
 )
 from attn_ft.config import load_config
 from attn_ft.data import AttnSupervisionCollator
-from attn_ft.losses import soft_suppression_loss
+from attn_ft.losses import a3tune_core_loss, soft_suppression_loss
 from attn_ft.models import (
     filter_trainable_parameters,
     load_model_and_processor
@@ -353,10 +354,16 @@ def train(config_path: str) -> None:
     # scheduler would advance it extra times in multi-GPU runs.
     
     loss_forms = {"suppress": "neglog", "suppress_squared": "squared"}
-    if cfg.train.loss not in loss_forms:
-        raise ValueError(f"Unsupported loss type: {cfg.train.loss}. Expected one of {sorted(loss_forms)}.")
-    attn_align_loss = partial(soft_suppression_loss, form=loss_forms[cfg.train.loss])
-    if guidance_enabled:
+    use_a3tune = cfg.train.loss == "a3tune_core"
+    if cfg.train.loss not in loss_forms and not use_a3tune:
+        raise ValueError(f"Unsupported loss type: {cfg.train.loss}. "
+                         f"Expected one of {sorted(loss_forms) + ['a3tune_core']}.")
+    if use_a3tune and (is_minicpm or is_mllama):
+        raise ValueError("loss a3tune_core is implemented for Qwen3-VL only")
+    attn_align_loss = partial(soft_suppression_loss, form=loss_forms.get(cfg.train.loss, "neglog"))
+    if guidance_enabled and use_a3tune:
+        accelerator.print("Using the A3Tune alignment loss (full-row softmax, uniform head average, squared)")
+    elif guidance_enabled:
         accelerator.print("Using soft suppression loss for attention alignment")
     else:
         accelerator.print("Attention guidance disabled because loss_weight=0")
@@ -444,7 +451,29 @@ def train(config_path: str) -> None:
                     )
 
                     align_loss_sum_all_l = torch.tensor(0.0, device=accelerator.device)
-                    if guidance_enabled:
+                    if guidance_enabled and use_a3tune:
+                        # A3Tune core: one map per sample from all selected heads of the guided
+                        # layers, weighted uniformly (no layer decay)
+                        all_maps = attn_manager.get_attentions()
+                        layer_ids, _ = build_layer_schedule(len(all_maps))
+                        sample_rows: list[list[torch.Tensor]] | None = None
+                        image_indices, sample_masks = [], []
+                        for attn_layer in layer_ids:
+                            layer_attn = all_maps[attn_layer]
+                            if layer_attn.shape[1] == 0:
+                                continue
+                            rows, image_indices, sample_masks = extract_t2i_rows(layer_attn, batch)
+                            if sample_rows is None:
+                                sample_rows = [[] for _ in rows]
+                            for sample_idx, row in enumerate(rows):
+                                sample_rows[sample_idx].append(row)
+                        if sample_rows:
+                            per_sample = a3tune_core_loss(
+                                [torch.cat(chunks, dim=0) for chunks in sample_rows], image_indices, sample_masks
+                            )
+                            if per_sample.numel():
+                                align_loss_sum_all_l = per_sample.sum()
+                    elif guidance_enabled:
                         all_maps = attn_manager.get_attentions()
                         resampler_attn = attn_manager.get_resampler_attention()
                         layer_ids, layer_weights = build_layer_schedule(len(all_maps))

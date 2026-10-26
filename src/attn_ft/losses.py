@@ -112,3 +112,31 @@ def soft_suppression_loss(
 
     sample_loss = masked_loss.sum(dim=(-1, -2)) / (text_counts * num_heads)
     return sample_loss.sum()
+
+
+def a3tune_core_loss(
+    rows: list[torch.Tensor],
+    image_indices: list[torch.Tensor],
+    masks: list[torch.Tensor],
+) -> torch.Tensor:
+    """A3Tune's alignment loss (Chang et al., ACL 2025, Eq. 9-10) on our supervision tokens.
+
+    rows[i]: pre-softmax attention logits [heads, tokens, keys] of the selected heads (all layers
+    concatenated) for the supervised tokens of sample i, over the full key row with the causal and
+    padding masks already added. Each head is softmaxed over the full row (text keys included), the
+    image-token columns are kept and averaged uniformly over heads and tokens, and the loss is
+    (1 - in-mask mass / visual mass)^2 with one segment (mask) per sample. Returns per-sample losses.
+    """
+    losses = []
+    for logits, image_idx, mask in zip(rows, image_indices, masks):
+        target = mask.reshape(-1)
+        if logits.numel() == 0 or image_idx.numel() != target.numel():
+            continue
+        probs = torch.softmax(logits.float(), dim=-1)                  # full row: text keys included
+        visual = probs[..., image_idx.to(probs.device)].mean(dim=(0, 1))  # uniform over heads and tokens
+        target = target.to(device=visual.device, dtype=visual.dtype)
+        p_in = (visual * target).sum() / visual.sum().clamp_min(1e-12)
+        losses.append((1.0 - p_in) ** 2)
+    if not losses:
+        return torch.zeros(0)
+    return torch.stack(losses)

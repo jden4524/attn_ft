@@ -12,6 +12,7 @@ These runs form a standalone controlled study; they are not meant to reproduce t
 | `qwen3_vl_2b_spmc_box_masks.yaml` | Each connected mask region is replaced by its bounding box |
 | `qwen3_vl_2b_spmc_gsam2_masks.yaml` | Masks from Grounded-SAM 2 instead of SAM3 (build them first, see below) |
 | `qwen3_vl_2b_spmc_squared_loss.yaml` | `(1 - p_R)^2` instead of `-log p_R`, same in-mask mass `p_R` |
+| `qwen3_vl_2b_a3tune_core.yaml` | A3Tune's alignment design (Chang et al., 2025, Eq. 8-10) in our pipeline: top-72 heads by visual attention ratio, full-row softmax averaged uniformly over heads and phrase tokens, `(1 - p_R)^2`, lambda 0.1. A3Tune's label filtering and A3MoE are left out |
 | `qwen3_vl_2b_spmc_heads_x0.5.yaml` / `_x2.yaml` | Both selection thresholds moved so the selected set is about half / double its size |
 
 `fixed_heads` holds the 72 heads selected on the base model, so every run supervises the same heads
