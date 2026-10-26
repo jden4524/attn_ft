@@ -110,7 +110,11 @@ def create(offer: dict, env: dict[str, str], name: str, disk: int, dry_run: bool
         shown = [c if "HF_TOKEN=" not in c else "<env with tokens>" for c in cmd]
         print("DRY RUN: vastai " + " ".join(json.dumps(c) if " " in c else c for c in shown))
         return None
-    out = json.loads(vast(*cmd))
+    text = vast(*cmd)
+    try:
+        out = json.loads(text)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"create returned: {text.strip()[:300]}") from None
     if not out.get("success"):
         raise RuntimeError(f"create failed: {out}")
     return int(out["new_contract"])
@@ -192,9 +196,10 @@ def launch(args: argparse.Namespace) -> None:
     state = load_state()
     repo = os.environ["HF_RUNS_REPO"]
     tarball = package_code(repo, args.dry_run)
+    skipped = set()  # offers that could not be rented (taken in the meantime)
     for attempt in range(args.max_attempts):
         offers, _ = filter_offers(fetch(args.gpu), args.min_cores, args.min_ram_gb)
-        offers = [o for o in offers if o["machine_id"] not in state["blacklist"]]
+        offers = [o for o in offers if o["machine_id"] not in state["blacklist"] and o["id"] not in skipped]
         if not offers:
             raise SystemExit(f"no acceptable {args.gpu} offer right now")
         offer = offers[0]
@@ -208,7 +213,16 @@ def launch(args: argparse.Namespace) -> None:
                **probe_env(args.gpu)}
         if args.max_steps:
             env["ATTN_FT_MAX_STEPS"] = str(args.max_steps)
-        iid = create(offer, env, args.name, args.disk, args.dry_run)
+        try:
+            iid = create(offer, env, args.name, args.disk, args.dry_run)
+        except RuntimeError as exc:
+            print(f"attempt {attempt + 1}: {exc}")
+            skipped.add(offer["id"])
+            # in case the instance was created after all
+            for inst in json.loads(vast("show", "instances", "--raw")):
+                if inst.get("label") == LABEL_PREFIX + args.name:
+                    destroy(inst["id"])
+            continue
         if iid is None:
             return
         job = {"name": args.name, "instance": iid, "machine": offer["machine_id"], "dph": offer["dph_total"],
