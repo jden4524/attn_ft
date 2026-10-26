@@ -1,0 +1,43 @@
+# Smoke test only: tiny batches, a checkpoint every 10 steps; run with ATTN_FT_MAX_STEPS.
+dataset:
+  hf_dataset_id: [Jackie2235/RLAIF-V-SEG, Jackie2235/flickr30k_attn_ft]
+  mask_mode: sam
+
+model:
+  name: Qwen/Qwen3-VL-2B-Instruct
+  lora_r: 16
+  lora_alpha: 16
+  lora_dropout: 0.1
+  lora_target_modules: [q_proj,k_proj]
+  attention_layers:
+    -2: 0.4
+    -4: 0.2
+    -6: 0.2
+    -8: 0.2
+  attention_heads: []
+  guide_layers: midlate
+  attention_layer_decay: 0.1
+  grounding_head_calibration: true
+  calibration_batches: 50
+  head_selection_scale: 1.0
+  # The 72 heads selected on the base model (calibration statistics over 973 training samples),
+  # fixed in advance so every run supervises and is measured on the same heads.
+  fixed_heads: {16: [5, 6, 7, 8, 9, 13, 14, 15], 17: [1, 2, 8, 10, 11, 12], 18: [2, 3, 4, 5, 11], 19: [4, 5, 9, 13], 20: [3, 4, 6, 8, 11, 12, 13, 14, 15], 21: [1, 8, 9, 12, 13, 15], 22: [4, 7, 9, 12], 23: [0, 1, 4, 6, 14, 15], 24: [6, 7, 10, 11, 12, 13, 14, 15], 25: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 26: [2, 3, 4, 5, 8, 14]}
+
+train:
+  run_name: smoke_qwen3_vl_2b
+  loss: suppress
+  # must equal the lambda of the paper's Qwen3-VL-2B sPMC run
+  loss_weight: 1
+  seed: 42
+  micro_batch_size: 2
+  effective_batch_size: 4
+  num_epochs: 1
+  lr: 1.0e-4
+  weight_decay: 0.1
+  warmup_steps: 2
+  log_every: 10
+  save_every: 10
+  wandb_enabled: true
+  wandb_project: attn_ft
+  local_test: false
