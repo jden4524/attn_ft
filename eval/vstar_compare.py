@@ -42,6 +42,7 @@ def per_question(rows, selected, own=None):
             "inbox_share_own": inbox_own, "pointing_acc_own": hit_own,
             "correct": float(r["pred"] == r["label"]),
             "format_mass": r["format_mass"],
+            "format_mass_bare": r.get("format_mass_bare", np.nan),
             "margin": r["margin"],
             "box_frac": r["box_frac"],
         }
