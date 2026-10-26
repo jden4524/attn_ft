@@ -6,8 +6,8 @@ For each V* question (191; GT target boxes from the V* release):
   * answer at the first answer position: each option is scored by the logsumexp of the logits of
     its single-token forms ("A", " A", "(A"; the model mostly answers "(A"), the margin is the
     score of the correct option minus the best other one, and the answer-format mass is the
-    softmax probability (whole vocabulary) of all those forms. `scores_bare` keeps the bare-letter
-    logits used for the base-model analysis of session 1;
+    softmax probability (whole vocabulary) of all those forms (`format_mass_bare`: bare letters
+    only). `scores_bare` keeps the bare-letter logits used for the base-model analysis of session 1;
   * knockout conditions (logits of the blocked keys set to -inf for text queries after the image),
     each with its letter scores and margin, so the margin drop is margin(none) - margin(cond):
       sel_inbox   selected heads, keys inside the GT boxes
@@ -263,6 +263,7 @@ def main():
             answer = {
                 "scores_bare": {c: float(logits[letter_ids[c]]) for c in letters},
                 "format_mass": float(sum(probs[option_ids[c]].sum() for c in letters)),
+                "format_mass_bare": float(sum(probs[letter_ids[c]] for c in letters)),
                 "top_token": tok.convert_ids_to_tokens(int(logits.argmax())),
                 "margin": margin(scores, it["label"]),
             }
