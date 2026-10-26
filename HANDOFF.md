@@ -42,6 +42,18 @@ On a GPU host: `orchestrate.py launch --name vstar1 --gpu "RTX 4090" --min-cores
 --timeout-min 120 --budget <total>` writes `results/vstar/<run_name>/step-<n>.jsonl` to the runs repo.
 Base and base+VAR were scored on CPU in session 2 (`results/vstar/base`, `results/vstar/base_var`).
 
+## Session 2 status (2026-10-26)
+All runs and V* evaluations of the fixed protocol are done; no vast.ai instance is left running.
+- Trained (checkpoints every 1,000 steps + final in `checkpoints/<run_name>/` of the runs repo): `Qwen3-VL-2B_spmc_reference`,
+  `Qwen3-VL-2B_autor_lateLoRA`, `Qwen3-VL-2B_spmc_shuffled_masks`, `Qwen3-VL-2B_spmc_squared_loss`, `Qwen3-VL-2B_a3tune_core`
+  (`configs/ablations/qwen3_vl_2b_a3tune_core.yaml`, `loss: a3tune_core`, tests in `tests/test_a3tune_loss.py`).
+- V* results per step: `results/vstar/<run_name>/step-<n>.jsonl` (GPU), base and base+VAR in `results/vstar/base*`.
+- Write-ups: `session2/RESULTS_vstar_trio.md` and `session2/RESULTS_vstar_a3tune.md` in the runs repo; the training-tuple
+  mass profile (`eval/train_mass_profile.py`) in `results/train_mass_profile/`.
+- The interleave of the two datasets is unseeded, so sample order (and the step count, 10,355-10,397) differs slightly per run.
+- The first a3tune_core attempt died on a device-side assert in the LM cross-entropy (label out of range); `train.py` now masks
+  and reports such labels. The rerun on another host flagged none.
+
 ## Pending
-- Smoke test, then the three runs: `qwen3_vl_2b_spmc`, `qwen3_vl_2b_autor_matched`, `qwen3_vl_2b_spmc_shuffled_masks`.
-- Analyses of the trained adapters on held-out data (see the private handoff for the fixed protocol).
+- Fill the rebuttal drafts from the session-2 results (coordinate with any session editing `session1/rebuttal/rebuttal_v4.md`).
+- Optional: box_masks run.
