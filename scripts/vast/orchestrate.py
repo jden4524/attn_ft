@@ -150,9 +150,15 @@ def destroy(iid: int) -> None:
 
 
 def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
-    """Poll until the job ends; returns the outcome and destroys the instance."""
+    """Poll until the job ends; returns the outcome and destroys the instance.
+
+    started / seen_running are kept in the job record, so a resumed watcher does not mistake a job whose
+    JOB_START has scrolled out of the log tail for one that never started. A missing status (API error)
+    decides nothing, and an exited/offline container must be seen on 3 polls in a row.
+    """
     iid, created = job["instance"], job["created"]
-    probe_seen = started = False
+    probe_seen = "probe" in job
+    down_polls = 0
     while True:
         time.sleep(60)
         text = logs(iid)
@@ -163,7 +169,13 @@ def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
             print(f"show instance {iid}: {exc}")
         status = info.get("actual_status")
         elapsed = (time.time() - created) / 60
-        started = started or "JOB_START" in text
+        if not job.get("started") and ("JOB_START" in text or "PROBE_RESULT" in text):
+            job["started"] = True
+            save_state(state)
+        if status == "running" and not job.get("seen_running"):
+            job["seen_running"] = True
+            save_state(state)
+        down_polls = down_polls + 1 if status in ("exited", "offline") else 0
         for line in text.splitlines():
             if line.startswith("PROBE_RESULT") and not probe_seen:
                 probe_seen = True
@@ -174,11 +186,11 @@ def watch(job: dict, state: dict, timeout_min: int, budget: float) -> str:
             outcome = "probe_failed"
         elif "JOB_END" in text:
             outcome = text[text.rfind("JOB_END"):].split("\n")[0]
-        elif status in ("exited", "offline"):
+        elif down_polls >= 3:
             outcome = f"container_{status}"
-        elif status != "running" and elapsed > 20:
+        elif status is not None and not job.get("seen_running") and elapsed > 20:
             outcome = "never_started"
-        elif status == "running" and not started and elapsed > 12:
+        elif status == "running" and not job.get("started") and elapsed > 12:
             # the bootstrap (code download from the hub) failed and the container keeps restarting
             outcome = "bootstrap_failed"
         elif elapsed > timeout_min + 30:
