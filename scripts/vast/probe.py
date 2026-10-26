@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 
 
 def gpu_info() -> dict:
@@ -69,13 +70,17 @@ def disk_mbs(path: str = "/root/probe.bin", size_mb: int = 2048) -> float:
 
 def main() -> None:
     result, reasons = {}, []
-    try:
-        result.update(gpu_info())
-        result["tflops_bf16"] = round(matmul_tflops(), 1)
-        result["download_mbs"], result["download_gb"] = (round(v, 1) for v in download_mbs())
-        result["disk_mbs"] = round(disk_mbs(), 1)
-    except Exception as exc:  # noqa: BLE001
-        reasons.append(f"error: {exc!r}")
+    steps = (("gpu", lambda: result.update(gpu_info())),
+             ("matmul", lambda: result.update(tflops_bf16=round(matmul_tflops(), 1))),
+             ("download", lambda: result.update(zip(("download_mbs", "download_gb"),
+                                                    (round(v, 1) for v in download_mbs())))),
+             ("disk", lambda: result.update(disk_mbs=round(disk_mbs(), 1))))
+    for name, step in steps:  # independent, so one failure does not hide the other measurements
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            reasons.append(f"{name} error: {exc!r}")
 
     expected = os.environ.get("PROBE_GPU_SUBSTR")
     if expected and expected.lower() not in result.get("gpu", "").lower():

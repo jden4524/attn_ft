@@ -36,7 +36,8 @@ PROBE_DEFAULTS = {  # gpu name: (min bf16 TFLOPS, min power limit W)
     "H100": (400, 630), "A100": (180, 230), "RTX 5090": (130, 520),
 }
 BOOTSTRAP = (
-    "pip install -q huggingface_hub hf_xet && "
+    # -U: the image may ship an older hub/hf_xet that pip would otherwise keep; <1.0 matches transformers<5
+    "pip install -q -U 'huggingface_hub<1.0' hf_xet && "
     "python -c \"import os, tarfile; from huggingface_hub import hf_hub_download; "
     "p = hf_hub_download(os.environ['HF_RUNS_REPO'], os.environ['CODE_TARBALL']); "
     "os.makedirs('/root/attn_ft', exist_ok=True); tarfile.open(p).extractall('/root/attn_ft')\" && "
