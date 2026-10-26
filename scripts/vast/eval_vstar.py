@@ -5,7 +5,8 @@ For each run name in JOB_EVAL_RUNS (comma-separated `run_name`s of the training 
 (steps 2000, 4000, 6000, 8000 and the last one; override with JOB_EVAL_STEPS) with
 eval/vstar_grounding.py and uploads each result to results/vstar/<run>/step-<n>.jsonl in
 HF_RUNS_REPO. Results already in the repo are skipped, so a rerun continues where one stopped.
-The heads come from `fixed_heads` of JOB_CONFIG.
+The heads come from `fixed_heads` of JOB_CONFIG. JOB_EVAL_LIMIT (testing) scores only the first N
+questions and uploads nothing.
 """
 from __future__ import annotations
 
@@ -26,14 +27,16 @@ def main() -> None:
     repo = os.environ["HF_RUNS_REPO"]
     runs = [r.strip() for r in os.environ["JOB_EVAL_RUNS"].split(",") if r.strip()]
     wanted = [int(s) for s in os.environ.get("JOB_EVAL_STEPS", "2000,4000,6000,8000").split(",")]
+    limit = os.environ.get("JOB_EVAL_LIMIT")
     api = HfApi()
     files = set(api.list_repo_files(repo))
 
     heads = yaml.safe_load(open(ROOT / os.environ["JOB_CONFIG"]))["model"]["fixed_heads"]
-    heads_path = Path("/root/heads.json")
+    heads_path = Path(os.environ.get("JOB_EVAL_DIR", "/root")) / "heads.json"
     heads_path.write_text(json.dumps({str(k): v for k, v in heads.items()}))
-    vstar = snapshot_download("craigwu/vstar_bench", repo_type="dataset", local_dir="/root/vstar_bench")
-    out_dir = Path("/root/vstar_out")
+    work = Path(os.environ.get("JOB_EVAL_DIR", "/root"))
+    vstar = snapshot_download("craigwu/vstar_bench", repo_type="dataset", local_dir=str(work / "vstar_bench"))
+    out_dir = work / "vstar_out"
     out_dir.mkdir(exist_ok=True)
 
     failed = []
@@ -61,12 +64,14 @@ def main() -> None:
                 cmd += ["--adapter", adapter]
             if run == "base_var":
                 cmd.append("--var")
+            if limit:
+                cmd += ["--limit", limit]
             print(f"EVAL_START {run} {tag}", flush=True)
             rc = subprocess.run(cmd).returncode
             n = sum(1 for _ in open(out)) if out.exists() else 0
             if rc != 0:
                 failed.append(f"{run}/{tag}")
-            if rc == 0 and n:  # a partial file would count as done on the next run
+            if rc == 0 and n and not limit:  # a partial file would count as done on the next run
                 api.upload_file(path_or_fileobj=str(out), path_in_repo=target, repo_id=repo,
                                 commit_message=f"V* eval {run} {tag} ({n} questions)")
             print(f"EVAL_END {run} {tag} rc={rc} questions={n}", flush=True)
