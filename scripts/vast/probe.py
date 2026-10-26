@@ -57,8 +57,11 @@ def download_mbs(repo: str = "Qwen/Qwen3-VL-2B-Instruct") -> tuple[float, float]
 
 def disk_mbs(path: str = "/root/probe.bin", size_mb: int = 2048) -> float:
     start = time.time()
-    subprocess.run(["dd", "if=/dev/zero", f"of={path}", "bs=1M", f"count={size_mb}", "oflag=direct"],
-                   capture_output=True, check=True)
+    base = ["dd", "if=/dev/zero", f"of={path}", "bs=1M", f"count={size_mb}"]
+    # some container filesystems reject O_DIRECT; fall back to a synced buffered write
+    if subprocess.run(base + ["oflag=direct"], capture_output=True).returncode != 0:
+        start = time.time()
+        subprocess.run(base + ["conv=fdatasync"], capture_output=True, check=True)
     elapsed = time.time() - start
     os.remove(path)
     return size_mb / elapsed
