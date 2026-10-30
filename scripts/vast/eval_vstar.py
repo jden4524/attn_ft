@@ -1,7 +1,8 @@
 """V* mechanistic evaluation of trained checkpoints, run inside a vast.ai job (JOB_EVAL_RUNS set).
 
 For each run name in JOB_EVAL_RUNS (comma-separated `run_name`s of the training configs, or `base` /
-`base_var` for the base model without / with VAR) this scores the checkpoints of the fixed protocol
+`base_var` for the base model without / with VAR; `<run_name>+var` applies VAR to a run's checkpoints and
+stores them under results/vstar/<run_name>_var/) this scores the checkpoints of the fixed protocol
 (steps 2000, 4000, 6000, 8000 and the last one; override with JOB_EVAL_STEPS) with
 eval/vstar_grounding.py and uploads each result to results/vstar/<run>/step-<n>.jsonl in
 HF_RUNS_REPO. Results already in the repo are skipped, so a rerun continues where one stopped.
@@ -41,28 +42,31 @@ def main() -> None:
 
     failed = []
     for run in runs:
+        use_var = run == "base_var" or run.endswith("+var")
+        ckpt_run = run.removesuffix("+var")
+        result_dir = run.replace("+var", "_var")
         if run in ("base", "base_var"):
             jobs = [("base", None)]
         else:
             steps = sorted({int(m.group(1)) for f in files
-                            if (m := re.fullmatch(rf"checkpoints/{re.escape(run)}/step-(\d+)/adapter_config\.json", f))})
+                            if (m := re.fullmatch(rf"checkpoints/{re.escape(ckpt_run)}/step-(\d+)/adapter_config\.json", f))})
             if not steps:
                 print(f"EVAL_SKIP {run}: no checkpoints in {repo}", flush=True)
                 failed.append(run)
                 continue
             chosen = sorted({s for s in steps if s in wanted} | {steps[-1]})
-            jobs = [(f"step-{s}", f"checkpoints/{run}/step-{s}") for s in chosen]
+            jobs = [(f"step-{s}", f"checkpoints/{ckpt_run}/step-{s}") for s in chosen]
         for tag, adapter in jobs:
-            target = f"results/vstar/{run}/{tag}.jsonl"
+            target = f"results/vstar/{result_dir}/{tag}.jsonl"
             if target in files:
                 print(f"EVAL_DONE_ALREADY {target}", flush=True)
                 continue
-            out = out_dir / f"{run}_{tag}.jsonl"
+            out = out_dir / f"{result_dir}_{tag}.jsonl"
             cmd = [sys.executable, str(ROOT / "eval/vstar_grounding.py"), "--heads", str(heads_path),
                    "--vstar-dir", vstar, "--out", str(out)]
             if adapter:
                 cmd += ["--adapter", adapter]
-            if run == "base_var":
+            if use_var:
                 cmd.append("--var")
             if limit:
                 cmd += ["--limit", limit]
